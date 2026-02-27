@@ -118,7 +118,5 @@ node server.js or node . command in /home/pi/Si4686-DAB-Webserver
 
 Then open your browser at `http://<raspberry-pi-ip>:3000`
 
-sudo systemctl enable dab-webserver
-sudo systemctl start dab-webserver
 ```
 
