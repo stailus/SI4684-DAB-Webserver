@@ -1,0 +1,15 @@
+{
+  "serial": {
+    "port": "/dev/ttyUSB0",
+    "baudRate": 1000000
+  },
+  "audio": {
+    "device": "plughw:0,0",
+    "sampleRate": 48000,
+    "channels": 2,
+    "bitrate": "128k"
+  },
+  "server": {
+    "port": 3000
+  }
+}

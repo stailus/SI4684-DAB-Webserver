@@ -1,0 +1,15 @@
+{
+  "name": "SI4686-DAB-Webserver",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node ."
+  },
+  "dependencies": {
+    "@serialport/parser-readline": "^13.0.0",
+    "express": "^5.2.1",
+    "geoip-lite": "^2.0.0",
+    "serialport": "^13.0.0",
+    "socket.io": "^4.8.3"
+  }
+}

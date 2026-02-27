@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Si4686 DAB Webserver</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-logo">Si4686 <span>DAB Webserver</span></div>
+  <div class="header-status">
+    <span id="headerEnsemble">—</span>
+    <span style="color: var(--border)">|</span>
+    <span id="headerTune">—</span>
+  </div>
+</div>
+
+<!-- LAYOUT -->
+  <!-- SIGNAL GRAPH - full width -->
+<div class="layout">
+  <div class="signal-graph-wrap" style="grid-column: 1 / -1;">
+    <div class="signal-graph-header">
+      <div class="signal-graph-title">Signal Strength</div>
+      <div class="signal-graph-value" id="signalBig">—<span>dBuV</span></div>
+    </div>
+    <canvas id="signalCanvas" height="70"></canvas>
+  </div>
+
+  <!-- COL LEFT -->
+  <div class="col-left" style="display:flex; flex-direction:column; gap:16px;">
+    <!-- TUNE -->
+    <div class="panel">
+      <div class="panel-title">Frequency</div>
+      <div class="tune-big">
+        <div class="tune-channel" id="tuneChannel">—</div>
+        <div class="tune-freq" id="tuneFreq">—<span>MHz</span></div>
+      </div>
+      <div class="tune-controls">
+        <select id="tuneSelect"></select>
+        <button class="btn" onclick="changeTune()">Tune</button>
+      </div>
+    </div>
+
+    <!-- ENSEMBLE -->
+    <div class="panel">
+      <div class="panel-title">Ensemble</div>
+      <div class="ensemble-name" id="ensemble">—</div>
+      <div class="ensemble-id" id="ensembleId">—</div>
+      <div class="divider"></div>
+      <div class="panel-title">Service</div>
+      <div class="svc-select-wrap">
+        <select id="services"></select>
+        <button class="btn" onclick="changeService()">Select</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- COL CENTER - PLAYER -->
+  <div class="col-center">
+    <div class="player-panel" id="pcControls">
+      <div class="player-top">
+        <div style="display:flex; align-items:center; gap:16px;">
+          <button class="play-btn" onclick="togglePlay()">
+            <svg class="pc-icon-play" width="18" height="18" viewBox="0 0 24 24" fill="#080e14">
+              <polygon points="5,3 19,12 5,21"/>
+            </svg>
+            <svg class="pc-icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="#080e14">
+              <rect x="5" y="3" width="4" height="18" rx="1"/>
+              <rect x="15" y="3" width="4" height="18" rx="1"/>
+            </svg>
+          </button>
+          <div>
+            <div class="now-playing-label">Now Playing</div>
+            <div class="station-name" id="pcStationTitle">—</div>
+            <div class="station-ensemble" id="pcEnsembleName">—</div>
+          </div>
+           <div style="margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+            <!--<div class="viz-wrap" id="pcVisualizer"></div>-->
+            <div class="status-dot"></div>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:16px; margin-top:10px;">
+          <div class="audio-type-badge" id="pcAudioType">DAB+</div>
+        </div>
+      </div>
+
+      <div class="rt-box" style="margin-top:12px;">
+        <div class="rt-label">Radio Text</div>
+        <div class="rt-text" id="pcRtText">No data</div>
+      </div>
+
+      <div class="vol-row">
+        <svg class="vol-icon" id="pcVolIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" onclick="toggleMute()" style="cursor:pointer;">
+          <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+        </svg>
+        <input type="range" class="vol-slider" id="pcVolSlider" min="0" max="100" value="80" oninput="updateVolume(this.value)">
+        <span class="vol-value" id="pcVolValue">80</span>
+      </div>
+
+      <!-- Service Info -->
+      <div id="serviceInfo" class="svc-info-grid"></div>
+
+    </div>
+  </div>
+
+  <!-- COL RIGHT -->
+  <div class="col-right" style="display:flex; flex-direction:column; gap:16px;">
+
+    <!-- SLIDESHOW -->
+    <div class="panel">
+      <div class="panel-title">SlideShow</div>
+      <div class="slideshow-wrap">
+        <img id="slideshow" src="" alt="">
+      </div>
+    </div>
+    <div class="panel">
+      <div class="lock-row">
+        <div class="panel-title" style="margin-bottom:0;">Signal Status</div>
+        <div class="lock-indicator">
+          <span class="lock-label" id="lockLabel">No Lock</span>
+          <div class="lock-dot" id="lock"></div>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="signal-section">
+        <div class="sig-row">
+          <div class="sig-label">MER</div>
+          <div class="sig-bar-wrap"><div class="sig-bar-fill" id="cnr"></div></div>
+          <div class="sig-value" id="cnrVal">—</div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-label">QUALITY</div>
+          <div class="sig-bar-wrap"><div class="sig-bar-fill" id="fic"></div></div>
+          <div class="sig-value" id="ficVal">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/js/constants.js"></script>
+<script src="/js/main.js"></script>
+</body>
+</html>
