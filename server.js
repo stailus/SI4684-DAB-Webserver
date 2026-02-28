@@ -29,7 +29,7 @@ app.use(express.static('public'))
 const audioEmitter = new EventEmitter()
 audioEmitter.setMaxListeners(50)
 
-// ================= HTTP STREAM ENDPOINT (for iOS) =================
+// ================= HTTP STREAM ENDPOINT (pentru iOS) =================
 app.get('/stream', (req, res) => {
   res.setHeader('Content-Type', 'audio/mpeg')
   res.setHeader('Transfer-Encoding', 'chunked')
@@ -78,7 +78,7 @@ const state = {
 let slideshowBuffer  = ''
 let collectingBase64 = false
 
-// ================= HELPER: reset mux =================
+// ================= HELPER: reset la schimbare mux =================
 function resetMuxState() {
   state.ensemble     = null
   state.ensembleName = null
@@ -92,7 +92,7 @@ function resetMuxState() {
   io.emit('muxReset')
 }
 
-// ================= HELPER: Service type from list =================
+// ================= HELPER: tip serviciu din lista =================
 function getServiceType(id) {
   const svc = state.servicesList.find(s => s.id === String(id))
   return svc ? svc.type : null
@@ -105,7 +105,7 @@ function getTimestamp() {
   return `[${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}]`
 }
 
-// ================= ENABLE AT START =================
+// ================= ENABLE LA PORNIRE =================
 port.on('open', () => {
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} Port Serial ${port.path} opened`)
   port.write('ENABLE=0\n')
@@ -131,7 +131,7 @@ parser.on('data', raw => {
 
   // logStream.write(line + '\n')
 
-  // ── colectare base64 - PRIMUL BLOC ──────────────────────
+  // -- colectare base64 - PRIMUL BLOC ----------------------
   if (collectingBase64) {
     if (line.startsWith('$') || line.startsWith('*')) {
       collectingBase64 = false
@@ -144,14 +144,14 @@ parser.on('data', raw => {
     }
   }
 
-  // ── BASE64= ─────────────────────────────────────────────
+  // -- BASE64= ---------------------------------------------
   if (line.startsWith('BASE64=')) {
     collectingBase64 = true
     slideshowBuffer  = ''
     return
   }
 
-  // ── *SERVICE= ───────────────────────────────────────────
+  // -- *SERVICE= -------------------------------------------
   if (line.startsWith('*SERVICE=')) {
     state.service     = line.slice(9).trim()
     state.serviceType = getServiceType(state.service)
@@ -162,7 +162,7 @@ parser.on('data', raw => {
     return
   }
 
-  // ── *TUNE= ──────────────────────────────────────────────
+  // -- *TUNE= ----------------------------------------------
   if (line.startsWith('*TUNE=')) {
     const newTune = line.slice(6).trim()
     if (state.tune !== newTune) {
@@ -173,12 +173,12 @@ parser.on('data', raw => {
     return
   }
 
-  // ── $M= (metadata hint) ─────────────────────────────────
+  // -- $M= (metadata hint) ---------------------------------
   if (line.startsWith('$M=')) {
     return
   }
 
-  // ── $L= (lista servicii + ensemble) ─────────────────────
+  // -- $L= (lista servicii + ensemble) ---------------------
   if (line.startsWith('$L=')) {
     const content = line.slice(3)
     const [headerPart, servicesPartRaw] = content.split(';SERVICES=')
@@ -222,7 +222,7 @@ parser.on('data', raw => {
     return
   }
 
-  // ── $I= (info serviciu activ) ────────────────────────────
+  // -- $I= (info serviciu activ) ----------------------------
   if (line.startsWith('$I=')) {
     const obj = {}
     line.slice(3).split(';').forEach(p => {
@@ -238,7 +238,7 @@ parser.on('data', raw => {
     return
   }
 
-  // ── $D= (dynamic label / radio text) ────────────────────
+  // -- $D= (dynamic label / radio text) --------------------
   if (line.startsWith('$D=')) {
     let text = line.slice(3)
     if (text.startsWith('RT=')) text = text.slice(3)
@@ -247,7 +247,7 @@ parser.on('data', raw => {
     return
   }
 
-  // ── $S= (semnal) ────────────────────────────────────────
+  // -- $S= (semnal) ----------------------------------------
   if (line.startsWith('$S=')) {
     const obj = {}
     line.slice(3).split(',').forEach(p => {
@@ -319,12 +319,21 @@ io.on('connection', socket => {
 })
 
 // ================= AUDIO STREAM =================
+let audioRunning = false
+
 function startAudio() {
+  if (audioRunning) {
+    console.log(`${getTimestamp()} ${colors.yellow}[WARN]${colors.reset} startAudio apelat dar deja ruleaza, skip`)
+    return
+  }
+  audioRunning = true
+
   const arecord = spawn('arecord', [
     '-D', config.audio.device,
     '-f', 'S16_LE',
     '-r', String(config.audio.sampleRate),
-    '-c', String(config.audio.channels)
+    '-c', String(config.audio.channels),
+    '-t','raw'
   ])
 
   const ffmpeg = spawn('ffmpeg', [
@@ -351,25 +360,27 @@ function startAudio() {
   arecord.stdout.pipe(ffmpeg.stdin)
 
   ffmpeg.stdout.on('data', chunk => {
-    io.emit('audio', chunk)         // ← Socket.io pentru desktop
-    audioEmitter.emit('chunk', chunk) // ← HTTP stream pentru iOS
+    io.emit('audio', chunk)         // ? Socket.io pentru desktop
+    audioEmitter.emit('chunk', chunk) // ? HTTP stream pentru iOS
   })
 
   ffmpeg.stderr.on('data', d => {
     // console.error('ffmpeg:', d.toString())
   })
 
-  arecord.on('close', () => {
-    console.log('arecord inchis, repornim...')
-    ffmpeg.kill()
-    setTimeout(startAudio, 1000)
-  })
+  function cleanup(reason) {
+    if (!audioRunning) return
+    audioRunning = false
+    console.log(`${getTimestamp()} ${colors.yellow}[WARN]${colors.reset} Audio oprit (${reason}), repornim in 2s...`)
+    try { arecord.kill('SIGKILL') } catch(e) {}
+    try { ffmpeg.kill('SIGKILL') } catch(e) {}
+    setTimeout(startAudio, 2000)
+  }
 
-  ffmpeg.on('close', () => {
-    console.log('ffmpeg inchis, repornim...')
-    arecord.kill()
-    setTimeout(startAudio, 1000)
-  })
+  arecord.on('close', () => cleanup('arecord closed'))
+  ffmpeg.on('close',  () => cleanup('ffmpeg closed'))
+  arecord.on('error', (e) => cleanup(`arecord error: ${e.message}`))
+  ffmpeg.on('error',  (e) => cleanup(`ffmpeg error: ${e.message}`))
 }
 
 startAudio()
