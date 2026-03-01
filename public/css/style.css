@@ -23,6 +23,8 @@ body {
   color: var(--text);
   min-height: 100vh;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 body::before {
@@ -34,11 +36,6 @@ body::before {
     radial-gradient(ellipse 40% 30% at 80% 80%, rgba(0,255,136,0.03) 0%, transparent 60%);
   pointer-events: none;
   z-index: 0;
-}
-
-.signal-graph-wrap {
-  grid-column: 1 / -1;
-  max-width: 100%;
 }
 
 /* ===== HEADER ===== */
@@ -292,7 +289,6 @@ body::before {
   overflow: hidden;
 }
 
-
 .player-panel::before {
   content: '';
   position: absolute;
@@ -302,20 +298,12 @@ body::before {
   opacity: 0.3;
 }
 
-
 .player-top {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 24px;
   align-items: start;
   margin-bottom: 16px;
-}
-
-.player-controls {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 0;
 }
 
 .now-playing-label {
@@ -343,7 +331,7 @@ body::before {
   font-size: 10px;
   color: var(--text-dim);
   letter-spacing: 2px;
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .rt-box {
@@ -366,39 +354,11 @@ body::before {
 }
 
 .rt-text {
-  font-size: 13px;
-  color: var(--text-dim);
+  font-size: 16px;
+  color: #ffffff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* visualizer */
-.viz-wrap {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 48px;
-  width: 160px;
-  margin-bottom: 16px;
-}
-
-.viz-bar {
-  flex: 1;
-  background: var(--accent);
-  border-radius: 1px;
-  opacity: 0.5;
-  transition: height 0.1s;
-}
-
-.pc-playing .viz-bar {
-  animation: vizAnim var(--dur, 0.5s) ease-in-out infinite alternate;
-  opacity: 0.8;
-}
-
-@keyframes vizAnim {
-  from { transform: scaleY(0.2); }
-  to   { transform: scaleY(1); }
 }
 
 /* controls */
@@ -439,12 +399,6 @@ body::before {
   font-weight: 900;
   color: var(--text-bright);
   letter-spacing: 3px;
-}
-
-.audio-meta {
-  font-size: 10px;
-  color: var(--text-dim);
-  line-height: 1.8;
 }
 
 .status-dot {
@@ -522,6 +476,7 @@ body::before {
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
+  height: 109px;
 }
 
 .svc-info-row {
@@ -544,7 +499,7 @@ body::before {
 }
 
 /* ===== SIGNAL BARS ===== */
-.signal-section { margin-bottom: 12px; }
+.signal-section { margin-bottom: 11px; }
 
 .sig-row {
   display: flex;
@@ -659,6 +614,100 @@ body::before {
   height: 1px;
   background: var(--border);
   margin: 12px 0;
+}
+
+/* ===== SCANNER ===== */
+.scan-chart-wrap {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+#scanCanvas {
+  width: 100%;
+  height: 80px;
+  display: block;
+  cursor: pointer;
+}
+
+.scan-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.scan-ch {
+  font-size: 9px;
+  padding: 2px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: 'Orbitron', monospace;
+  letter-spacing: 1px;
+}
+
+.scan-ch:hover          { border-color: var(--accent); color: var(--accent); }
+.scan-ch.has-signal     { border-color: var(--accent2); color: var(--accent2); }
+.scan-ch.strong-signal  { border-color: #ffeb3b; color: #ffeb3b; }
+
+.scan-status {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+  font-family: 'Share Tech Mono', monospace;
+}
+
+.scan-status.scanning {
+  color: var(--accent);
+  animation: blink 1s infinite;
+}
+
+.scan-overlay {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .scan-panel { display: none; }
+
+  .scan-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(8,14,20,0.95);
+    z-index: 999;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  .scan-overlay.active {
+    display: flex;
+  }
+  
+  .scan-overlay-text {
+    font-family: 'Orbitron', monospace;
+    font-size: 14px;
+    color: var(--accent);
+    letter-spacing: 3px;
+    animation: blink 1s infinite;
+  }
+  
+  .scan-overlay-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+  }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
 }
 
 /* scrollbar */

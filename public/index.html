@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ro">
+<html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,31 +13,52 @@
 <div class="header">
   <div class="header-logo">Si4686 <span>DAB Webserver</span></div>
   <div class="header-status">
-    <span id="headerEnsemble">—</span>
+    <span id="headerEnsemble">-</span>
     <span style="color: var(--border)">|</span>
-    <span id="headerTune">—</span>
+    <span id="headerTune"> - </span>
   </div>
 </div>
 
+<div class="scan-overlay" id="scanOverlay">
+  <div class="scan-overlay-text">SCAN IN PROGRESS</div>
+  <div class="scan-overlay-sub" id="scanOverlaySub">Please wait...</div>
+</div>
+
 <!-- LAYOUT -->
-  <!-- SIGNAL GRAPH - full width -->
 <div class="layout">
+
+  <!-- SIGNAL GRAPH - full width -->
   <div class="signal-graph-wrap" style="grid-column: 1 / -1;">
     <div class="signal-graph-header">
       <div class="signal-graph-title">Signal Strength</div>
-      <div class="signal-graph-value" id="signalBig">—<span>dBuV</span></div>
+      <div class="signal-graph-value" id="signalBig">�<span>dBuV</span></div>
     </div>
     <canvas id="signalCanvas" height="70"></canvas>
   </div>
 
+  <!-- SCANNER - full width -->
+  <div class="panel scan-panel" style="grid-column: 1 / -1;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+      <div class="panel-title" style="margin-bottom:0;">Band Scan</div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span class="scan-status" id="scanStatus"></span>
+        <button class="btn" id="scanBtn" onclick="toggleScan()">Scan</button>
+      </div>
+    </div>
+    <div class="scan-chart-wrap">
+      <canvas id="scanCanvas" height="80"></canvas>
+    </div>
+  </div>
+
   <!-- COL LEFT -->
   <div class="col-left" style="display:flex; flex-direction:column; gap:16px;">
+
     <!-- TUNE -->
     <div class="panel">
       <div class="panel-title">Frequency</div>
       <div class="tune-big">
-        <div class="tune-channel" id="tuneChannel">—</div>
-        <div class="tune-freq" id="tuneFreq">—<span>MHz</span></div>
+        <div class="tune-channel" id="tuneChannel">-</div>
+        <div class="tune-freq" id="tuneFreq">-<span>MHz</span></div>
       </div>
       <div class="tune-controls">
         <select id="tuneSelect"></select>
@@ -48,8 +69,8 @@
     <!-- ENSEMBLE -->
     <div class="panel">
       <div class="panel-title">Ensemble</div>
-      <div class="ensemble-name" id="ensemble">—</div>
-      <div class="ensemble-id" id="ensembleId">—</div>
+      <div class="ensemble-name" id="ensemble">-</div>
+      <div class="ensemble-id" id="ensembleId">-</div>
       <div class="divider"></div>
       <div class="panel-title">Service</div>
       <div class="svc-select-wrap">
@@ -75,11 +96,10 @@
           </button>
           <div>
             <div class="now-playing-label">Now Playing</div>
-            <div class="station-name" id="pcStationTitle">—</div>
-            <div class="station-ensemble" id="pcEnsembleName">—</div>
+            <div class="station-name" id="pcStationTitle">-</div>
+            <div class="station-ensemble" id="pcEnsembleName">-</div>
           </div>
-           <div style="margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
-            <!--<div class="viz-wrap" id="pcVisualizer"></div>-->
+          <div style="margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
             <div class="status-dot"></div>
           </div>
         </div>
@@ -97,7 +117,7 @@
         <svg class="vol-icon" id="pcVolIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" onclick="toggleMute()" style="cursor:pointer;">
           <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
         </svg>
-        <input type="range" class="vol-slider" id="pcVolSlider" min="0" max="100" value="80" oninput="updateVolume(this.value)">
+        <input type="range" class="vol-slider" id="pcVolSlider" min="0" max="100" value="50" oninput="updateVolume(this.value)">
         <span class="vol-value" id="pcVolValue">80</span>
       </div>
 
@@ -117,6 +137,8 @@
         <img id="slideshow" src="" alt="">
       </div>
     </div>
+
+    <!-- SIGNAL STATUS -->
     <div class="panel">
       <div class="lock-row">
         <div class="panel-title" style="margin-bottom:0;">Signal Status</div>
@@ -130,17 +152,16 @@
         <div class="sig-row">
           <div class="sig-label">MER</div>
           <div class="sig-bar-wrap"><div class="sig-bar-fill" id="cnr"></div></div>
-          <div class="sig-value" id="cnrVal">—</div>
+          <div class="sig-value" id="cnrVal">�</div>
         </div>
         <div class="sig-row">
           <div class="sig-label">QUALITY</div>
           <div class="sig-bar-wrap"><div class="sig-bar-fill" id="fic"></div></div>
-          <div class="sig-value" id="ficVal">—</div>
+          <div class="sig-value" id="ficVal">�</div>
         </div>
       </div>
     </div>
   </div>
-
 </div>
 
 <script src="/js/constants.js"></script>

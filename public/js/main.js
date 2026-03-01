@@ -44,6 +44,10 @@ function processQueue() {
 
 socket.on('audio', (chunk) => {
   if (!mediaSourceReady) return
+  if (!isPlaying) {
+    queue.length = 0
+    return
+  }
   const uint8 = new Uint8Array(chunk)
   queue.push(uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength))
   processQueue()
@@ -69,10 +73,9 @@ function drawGraph() {
 
   if (signalHistory.length < 2) return
 
-  const min = 0, max = 40
+  const min = 0, max = 80
   const pts = signalHistory.slice(-MAX_POINTS)
 
-  // fill
   ctx.beginPath()
   ctx.moveTo(0, H)
   pts.forEach((v, i) => {
@@ -88,7 +91,6 @@ function drawGraph() {
   ctx.fillStyle = grad
   ctx.fill()
 
-  // line
   ctx.beginPath()
   pts.forEach((v, i) => {
     const x = (i / (pts.length - 1)) * W
@@ -110,18 +112,27 @@ function togglePlay() {
   isPlaying = !isPlaying
   if (isPlaying) {
     pcControls.classList.add('pc-playing-state')
+    // goleste buffer-ul acumulat
+    queue.length = 0
+    if (sourceBuffer && !sourceBuffer.updating && mediaSourceObj.readyState === 'open') {
+      try {
+        sourceBuffer.abort()
+        sourceBuffer.remove(0, Infinity)
+      } catch(e) {}
+    }
     audio.play()
   } else {
     pcControls.classList.remove('pc-playing-state')
     audio.pause()
   }
 }
+
 function updateVolume(val) {
   document.getElementById('pcVolValue').textContent = val
   document.getElementById('pcVolSlider').style.setProperty('--vol', val + '%')
   audio.volume = val / 100
 }
-updateVolume(80)
+updateVolume(50)
 
 let isMuted = false
 function toggleMute() {
@@ -147,6 +158,7 @@ function populateTuneDropdown(currentTune) {
 
 function changeTune() {
   const ch = document.getElementById('tuneSelect').value
+  if (!ch) return
   socket.emit('setTune', ch)
 }
 
@@ -161,14 +173,14 @@ socket.on('tuneError', msg => alert(msg))
 function updateTuneDisplay(tune) {
   const ch = getChannelByIndex(tune)
   document.getElementById('tuneChannel').textContent = ch ? ch.name : `CH ${tune}`
-  document.getElementById('tuneFreq').innerHTML = ch ? `${ch.freq}<span>MHz</span>` : `â€”<span>MHz</span>`
-  document.getElementById('headerTune').textContent = ch ? `${ch.name} Â· ${ch.freq} MHz` : `CH ${tune}`
+  document.getElementById('tuneFreq').innerHTML = ch ? `${ch.freq}<span>MHz</span>` : `—<span>MHz</span>`
+  document.getElementById('headerTune').textContent = ch ? `${ch.name} \u00b7 ${ch.freq} MHz` : `CH ${tune}`
 }
 
 // ===== RADIO TEXT =====
 function setRadioText(text) {
   const el = document.getElementById('pcRtText')
-  text = text.replace(/^[\s\-â€“â€”]+/, '').trim()
+  text = text.replace(/^[\s\-–—]+/, '').trim()
   const parts = text.split(' - ')
   if (parts.length >= 2) {
     const artist = parts[0].trim()
@@ -198,9 +210,7 @@ const img = document.getElementById('slideshow')
 socket.on('fullState', state => {
   populateTuneDropdown(state.tune !== null && state.tune !== undefined ? String(state.tune) : null)
   if (state.tune) updateTuneDisplay(state.tune)
-
   if (state.servicesList?.length) populateServices(state.servicesList, state.service)
-
   if (state.service) {
     servicesDropdown.value = String(state.service)
     document.getElementById('pcStationTitle').textContent = getStationName(state.service)
@@ -211,6 +221,14 @@ socket.on('fullState', state => {
   if (state.signal) updateSignal(state.signal)
   if (state.slideshow) img.src = 'data:image/jpeg;base64,' + state.slideshow
   if (state.serviceInfo) renderServiceInfo(state.serviceInfo)
+  if (state.scanResults?.length) {
+    scanResults = state.scanResults
+    drawScanChart(scanResults)
+    updateScanChannels(scanResults)
+  }
+  if (state.scanning) {
+    document.getElementById('scanOverlay').classList.add('active')
+  }
 })
 
 socket.on('servicesList', list => populateServices(list, null))
@@ -225,7 +243,6 @@ socket.on('service', data => {
 })
 
 socket.on('ensembleInfo', data => updateEnsemble(data.ensemble, data.ensembleName))
-
 socket.on('dynamicLabel', text => setRadioText(text))
 socket.on('signal', updateSignal)
 
@@ -235,30 +252,26 @@ socket.on('image', base64 => {
 
 socket.on('serviceInfo', info => {
   renderServiceInfo(info)
-  document.getElementById('pcBitrate').textContent = (info.BITRATE || '\u2014') + ' kbps \u00b7 ' + (AUDIO_MAP[info.AUDIO] || '\u2014')
-  document.getElementById('pcSample').textContent = (info.SAMPLERATE || '48000') + ' Hz'
   if (info.TYPE) setAudioType(info.TYPE)
 })
 
 socket.on('muxReset', () => {
-  document.getElementById('pcStationTitle').textContent = '\u2014'
-  document.getElementById('pcEnsembleName').textContent = '\u2014'
+  document.getElementById('pcStationTitle').textContent = '-'
+  document.getElementById('pcEnsembleName').textContent = '-'
   document.getElementById('pcRtText').textContent = 'No data'
-  document.getElementById('pcBitrate').textContent = '\u2014 kbps \u00b7 \u2014'
   document.getElementById('pcAudioType').textContent = 'DAB+'
-  document.getElementById('ensemble').textContent = '\u2014'
-  document.getElementById('ensembleId').textContent = '\u2014'
-  document.getElementById('headerEnsemble').textContent = '\u2014'
+  document.getElementById('ensemble').textContent = '-'
+  document.getElementById('ensembleId').textContent = '-'
+  document.getElementById('headerEnsemble').textContent = '-'
   servicesDropdown.innerHTML = ''
-  img.src = ''
   document.getElementById('serviceInfo').innerHTML = ''
 })
 
 // ===== HELPERS =====
 function updateEnsemble(ensemble, ensembleName) {
-  document.getElementById('ensemble').textContent = ensembleName || '\u2014'
-  document.getElementById('ensembleId').textContent = ensemble || '\u2014'
-  document.getElementById('headerEnsemble').textContent = ensembleName || '\u2014'
+  document.getElementById('ensemble').textContent = ensembleName || '-'
+  document.getElementById('ensembleId').textContent = ensemble || '-'
+  document.getElementById('headerEnsemble').textContent = ensembleName || '-'
   document.getElementById('pcEnsembleName').textContent = (ensembleName || '\u2014') + ' \u00b7 ' + (ensemble || '\u2014')
 }
 
@@ -296,8 +309,9 @@ function updateSignal(data) {
     if (signalHistory.length > MAX_POINTS * 2) signalHistory.splice(0, MAX_POINTS)
     document.getElementById('signalBig').innerHTML = sig.toFixed(1) + '<span>dBuV</span>'
   }
-  setBar('cnr',    normalize(data.CNR,    0, 30))
-  setBar('fic',    normalize(data.FIC,    0, 100))
+
+  setBar('cnr', normalize(data.CNR,  0, 100))
+  setBar('fic', normalize(data.FIC,  0, 100))
 
   const cnr = parseFloat(data.CNR)
   const fic = parseFloat(data.FIC)
@@ -367,6 +381,125 @@ function renderServiceInfo(info) {
       </div>`
   })
 }
+
+// ===== SCANNER =====
+let scanResults = []
+let scanRunning = false
+const scanCanvas = document.getElementById('scanCanvas')
+const scanCtx = scanCanvas.getContext('2d')
+
+function resizeScanCanvas() {
+  scanCanvas.width = scanCanvas.offsetWidth
+  scanCanvas.height = 80
+  if (scanResults.length > 0) drawScanChart(scanResults)
+}
+
+resizeScanCanvas()
+window.addEventListener('resize', resizeScanCanvas)
+
+function toggleScan() {
+  if (scanRunning) {
+    socket.emit('stopScan')
+    scanRunning = false
+    document.getElementById('scanBtn').textContent = 'Scan'
+    document.getElementById('scanStatus').textContent = 'Stopped'
+    document.getElementById('scanStatus').className = 'scan-status'
+  } else {
+    scanResults = []
+    const sc = document.getElementById('scanChannels')
+    if (sc) sc.innerHTML = ''
+    drawScanChart([])
+    socket.emit('startScan')
+  }
+}
+
+socket.on('scanStart', () => {
+  scanRunning = true
+  document.getElementById('scanBtn').textContent = 'Stop'
+  const status = document.getElementById('scanStatus')
+  document.getElementById('scanOverlay').classList.add('active')
+  status.textContent = 'Scanning...'
+  status.className = 'scan-status scanning'
+})
+
+socket.on('scanProgress', data => {
+  scanResults[data.ch] = data.result
+  drawScanChart(scanResults)
+  document.getElementById('scanStatus').textContent = `${data.result.name} \u00b7 ${data.ch + 1}/38`
+  document.getElementById('scanOverlaySub').textContent = `${data.result.name} \u00b7 ${data.ch + 1}/38`
+  updateScanChannels(scanResults)
+})
+
+socket.on('scanComplete', results => {
+  scanRunning = false
+  scanResults = results
+  drawScanChart(results)
+  updateScanChannels(results)
+  document.getElementById('scanBtn').textContent = 'Scan'
+  document.getElementById('scanOverlay').classList.remove('active')
+  const found = results.filter(r => r.lock).length
+  const status = document.getElementById('scanStatus')
+  status.textContent = `Done \u00b7 ${found} found`
+  status.className = 'scan-status'
+})
+
+socket.on('scanError', msg => {
+  document.getElementById('scanStatus').textContent = msg
+  scanRunning = false
+})
+
+function drawScanChart(results) {
+  const W = scanCanvas.width
+  const H = scanCanvas.height
+  scanCtx.clearRect(0, 0, W, H)
+
+  if (!results || results.length === 0) return
+
+const total = 38
+  const barW = Math.max(2, Math.floor((W - total * 2) / total))
+  const maxSig = 80
+
+  results.forEach((r, i) => {
+    if (!r) return
+    const x = i * (barW + 2) + 1
+    const sig = Math.max(0, r.signal || 0)
+    const h = Math.max(2, (sig / maxSig) * (H - 16))
+    const y = H - h
+
+    let color
+    if (!r.lock || sig < 3)  color = '#1a3a4a'
+    else if (sig < 10)        color = '#00d2ff'
+    else if (sig < 20)        color = '#00e676'
+    else                      color = '#ffeb3b'
+
+    const grad = scanCtx.createLinearGradient(0, y, 0, H)
+    grad.addColorStop(0, color)
+    grad.addColorStop(1, color + '44')
+    scanCtx.fillStyle = grad
+    scanCtx.fillRect(x, y, barW, h)
+    scanCtx.fillStyle = (r.lock && sig > 3) ? color : '#ffffff'
+    scanCtx.font = '12px Share Tech Mono'
+    scanCtx.textAlign = 'center'
+    scanCtx.fillText(r.name, x + barW / 2, y - 2)
+  })
+  scanCtx.strokeStyle = 'rgba(0,210,255,0.1)'
+  scanCtx.lineWidth = 1
+  scanCtx.beginPath()
+  scanCtx.moveTo(0, H - 1)
+  scanCtx.lineTo(W, H - 1)
+  scanCtx.stroke()
+}
+
+function updateScanChannels(results) {
+}
+
+scanCanvas.addEventListener('click', e => {
+  if (scanResults.length === 0) return
+  const rect = scanCanvas.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const ch = Math.floor((x / scanCanvas.offsetWidth) * 38)
+  if (ch >= 0 && ch < 38) socket.emit('setTune', String(ch))
+})
 
 // init
 populateTuneDropdown(null)

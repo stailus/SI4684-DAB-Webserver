@@ -29,7 +29,7 @@ app.use(express.static('public'))
 const audioEmitter = new EventEmitter()
 audioEmitter.setMaxListeners(50)
 
-// ================= HTTP STREAM ENDPOINT (pentru iOS) =================
+// ================= HTTP STREAM ENDPOINT (for iOS) =================
 app.get('/stream', (req, res) => {
   res.setHeader('Content-Type', 'audio/mpeg')
   res.setHeader('Transfer-Encoding', 'chunked')
@@ -71,11 +71,13 @@ const state = {
   dynamicLabel: null,
   signal:       {},
   slideshow:    null,
-  enabled:      false
+  enabled:      false,
+  scanResults: [],
+  scanning: false
 }
 
 // ================= SLIDESHOW BUFFER =================
-let slideshowBuffer  = ''
+let slideshowChunks = []
 let collectingBase64 = false
 
 // ================= HELPER: reset la schimbare mux =================
@@ -87,9 +89,14 @@ function resetMuxState() {
   state.serviceType  = null
   state.dynamicLabel = null
   state.slideshow    = null
-  slideshowBuffer    = ''
+  slideshowChunks = []
   collectingBase64   = false
   io.emit('muxReset')
+
+  if (!scanning) {
+    state.slideshow = null
+    io.emit('image', fs.readFileSync('./public/images/default.jpg').toString('base64'))
+  }
 }
 
 // ================= HELPER: tip serviciu din lista =================
@@ -129,40 +136,41 @@ parser.on('data', raw => {
   const line = raw.trim()
   if (!line) return
 
-  // logStream.write(line + '\n')
-
-  // -- colectare base64 - PRIMUL BLOC ----------------------
-  if (collectingBase64) {
-    if (line.startsWith('$') || line.startsWith('*')) {
-      collectingBase64 = false
-      state.slideshow  = slideshowBuffer
-      if (slideshowBuffer) io.emit('image', slideshowBuffer)
-      slideshowBuffer  = ''
-    } else {
-      slideshowBuffer += line
-      return
-    }
-  }
-
-  // -- BASE64= ---------------------------------------------
-  if (line.startsWith('BASE64=')) {
-    collectingBase64 = true
-    slideshowBuffer  = ''
-    return
-  }
-
-  // -- *SERVICE= -------------------------------------------
-  if (line.startsWith('*SERVICE=')) {
-    state.service     = line.slice(9).trim()
-    state.serviceType = getServiceType(state.service)
-    io.emit('service', {
-      id:   state.service,
-      type: state.serviceType
+if (collectingBase64) {
+  if (line.startsWith('$') || line.startsWith('*')) {
+    collectingBase64 = false
+    const buf = slideshowChunks.join('')
+    slideshowChunks = []
+    setImmediate(() => {
+      state.slideshow = buf
+      if (buf) io.emit('image', buf)
     })
+  } else {
+    slideshowChunks.push(line)
     return
   }
+}
 
-  // -- *TUNE= ----------------------------------------------
+if (line.startsWith('BASE64=')) {
+  collectingBase64 = true
+  slideshowChunks = []
+  return
+}
+
+
+if (line.startsWith('*SERVICE=')) {
+  state.service     = line.slice(9).trim()
+  state.serviceType = getServiceType(state.service)
+  state.slideshow   = null
+  io.emit('service', { id: state.service, type: state.serviceType })
+  
+  if (!scanning) {
+    state.slideshow = null
+    io.emit('image', fs.readFileSync('./public/images/default.jpg').toString('base64'))
+  }
+  return
+}
+
   if (line.startsWith('*TUNE=')) {
     const newTune = line.slice(6).trim()
     if (state.tune !== newTune) {
@@ -173,21 +181,15 @@ parser.on('data', raw => {
     return
   }
 
-  // -- $M= (metadata hint) ---------------------------------
-  if (line.startsWith('$M=')) {
-    return
-  }
+  if (line.startsWith('$M=')) return
 
-  // -- $L= (lista servicii + ensemble) ---------------------
   if (line.startsWith('$L=')) {
     const content = line.slice(3)
     const [headerPart, servicesPartRaw] = content.split(';SERVICES=')
     const headerParts = headerPart.split(',')
 
     const ensembleField = headerParts.find(x => x.startsWith('ENSEMBLE='))
-    if (ensembleField) {
-      state.ensemble = ensembleField.slice(9).trim()
-    }
+    if (ensembleField) state.ensemble = ensembleField.slice(9).trim()
 
     const ensembleIndex = headerParts.indexOf(ensembleField)
     if (ensembleIndex !== -1 && headerParts[ensembleIndex + 1]) {
@@ -197,11 +199,7 @@ parser.on('data', raw => {
     if (servicesPartRaw) {
       state.servicesList = servicesPartRaw.split(';').map(s => {
         const parts = s.split(',')
-        return {
-          id:   parts[0]?.trim(),
-          type: parts[1]?.trim(),
-          name: parts.slice(2).join(',').trim()
-        }
+        return { id: parts[0]?.trim(), type: parts[1]?.trim(), name: parts.slice(2).join(',').trim() }
       }).filter(s => s.id !== undefined && s.name)
     }
 
@@ -209,10 +207,7 @@ parser.on('data', raw => {
       state.serviceType = getServiceType(state.service)
     }
 
-    io.emit('ensembleInfo', {
-      ensemble:     state.ensemble,
-      ensembleName: state.ensembleName
-    })
+    io.emit('ensembleInfo', { ensemble: state.ensemble, ensembleName: state.ensembleName })
 
     const newListJson = JSON.stringify(state.servicesList)
     if (state._cachedServicesList !== newListJson) {
@@ -222,15 +217,12 @@ parser.on('data', raw => {
     return
   }
 
-  // -- $I= (info serviciu activ) ----------------------------
   if (line.startsWith('$I=')) {
     const obj = {}
     line.slice(3).split(';').forEach(p => {
       const idx = p.indexOf('=')
       if (idx === -1) return
-      const k = p.slice(0, idx).trim()
-      const v = p.slice(idx + 1).trim()
-      if (k) obj[k] = v
+      obj[p.slice(0, idx).trim()] = p.slice(idx + 1).trim()
     })
     obj.TYPE = state.serviceType
     state.serviceInfo = obj
@@ -238,7 +230,6 @@ parser.on('data', raw => {
     return
   }
 
-  // -- $D= (dynamic label / radio text) --------------------
   if (line.startsWith('$D=')) {
     let text = line.slice(3)
     if (text.startsWith('RT=')) text = text.slice(3)
@@ -247,15 +238,12 @@ parser.on('data', raw => {
     return
   }
 
-  // -- $S= (semnal) ----------------------------------------
   if (line.startsWith('$S=')) {
     const obj = {}
     line.slice(3).split(',').forEach(p => {
       const idx = p.indexOf('=')
       if (idx === -1) return
-      const k = p.slice(0, idx).trim()
-      const v = p.slice(idx + 1).trim()
-      if (k) obj[k] = v
+      obj[p.slice(0, idx).trim()] = p.slice(idx + 1).trim()
     })
     state.signal = obj
     io.emit('signal', obj)
@@ -268,16 +256,12 @@ let connectionCount = 0
 
 io.on('connection', socket => {
   connectionCount++
-  const rawIp =
-    socket.handshake.headers['x-forwarded-for'] ||
-    socket.handshake.address
+  const rawIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address
   const ip = rawIp.replace('::ffff:', '').split(',')[0].trim()
 
   const geo = geoip.lookup(ip)
   let location = 'Unknown'
-  if (geo) {
-    location = `${geo.city || 'Unknown city'}, ${geo.region || ''}, ${geo.country || ''}`
-  }
+  if (geo) location = `${geo.city || 'Unknown city'}, ${geo.region || ''}, ${geo.country || ''}`
 
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} Web client connected (${ip === '::1' ? 'localhost' : ip}) [${connectionCount}] Location: ${location}`)
 
@@ -286,12 +270,14 @@ io.on('connection', socket => {
     console.log(`${getTimestamp()} ${colors.yellow}[INFO]${colors.reset} Web client disconnected (${ip}) [${connectionCount}] Reason: ${reason}`)
   })
 
+  const defaultImg = fs.readFileSync('./public/images/default.jpg').toString('base64')
+  const stateWithImg = { ...state, slideshow: state.slideshow || defaultImg }
+  
   if (!state.service) {
-    setTimeout(() => socket.emit('fullState', state), 2000)
+    setTimeout(() => socket.emit('fullState', stateWithImg), 2000)
   } else {
-    socket.emit('fullState', state)
+    socket.emit('fullState', stateWithImg)
   }
-
   socket.on('setService', id => {
     console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} setService: ${id} from (${ip})`)
     port.write(`SERVICE=${id}\n`)
@@ -316,7 +302,87 @@ io.on('connection', socket => {
     io.emit('enableState', state.enabled)
     console.log('Enable:', state.enabled)
   })
+
+  socket.on('startScan', () => startScan(socket))
+  socket.on('stopScan',  () => { scanning = false })
 })
+
+// ================= SCANNER =================
+const DAB_CHANNELS_SCAN = [
+  { ch:0,  name:'5A',  freq:174.928 }, { ch:1,  name:'5B',  freq:176.640 },
+  { ch:2,  name:'5C',  freq:178.352 }, { ch:3,  name:'5D',  freq:180.064 },
+  { ch:4,  name:'6A',  freq:181.936 }, { ch:5,  name:'6B',  freq:183.648 },
+  { ch:6,  name:'6C',  freq:185.360 }, { ch:7,  name:'6D',  freq:187.072 },
+  { ch:8,  name:'7A',  freq:188.928 }, { ch:9,  name:'7B',  freq:190.640 },
+  { ch:10, name:'7C',  freq:192.352 }, { ch:11, name:'7D',  freq:194.064 },
+  { ch:12, name:'8A',  freq:195.936 }, { ch:13, name:'8B',  freq:197.648 },
+  { ch:14, name:'8C',  freq:199.360 }, { ch:15, name:'8D',  freq:201.072 },
+  { ch:16, name:'9A',  freq:202.928 }, { ch:17, name:'9B',  freq:204.640 },
+  { ch:18, name:'9C',  freq:206.352 }, { ch:19, name:'9D',  freq:208.064 },
+  { ch:20, name:'10A', freq:209.936 }, { ch:21, name:'10B', freq:211.648 },
+  { ch:22, name:'10C', freq:213.360 }, { ch:23, name:'10D', freq:215.072 },
+  { ch:24, name:'11A', freq:216.928 }, { ch:25, name:'11B', freq:218.640 },
+  { ch:26, name:'11C', freq:220.352 }, { ch:27, name:'11D', freq:222.064 },
+  { ch:28, name:'12A', freq:223.936 }, { ch:29, name:'12B', freq:225.648 },
+  { ch:30, name:'12C', freq:227.360 }, { ch:31, name:'12D', freq:229.072 },
+  { ch:32, name:'13A', freq:230.784 }, { ch:33, name:'13B', freq:232.496 },
+  { ch:34, name:'13C', freq:234.208 }, { ch:35, name:'13D', freq:235.776 },
+  { ch:36, name:'13E', freq:237.488 }, { ch:37, name:'13F', freq:239.200 }
+]
+
+let scanning = false
+
+async function sleepMs(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function startScan(socket) {
+  state.scanning = true
+  state.signal = {}
+
+  try {
+    const defaultImg = fs.readFileSync('./public/images/default.jpg')
+    io.emit('image', defaultImg.toString('base64'))
+  } catch(e) {
+     console.log('Error loading default image:', e.message)
+  }
+
+  if (scanning) {
+    socket.emit('scanError', 'Scan already in progress')
+    return
+  }
+  scanning = true
+  const originalTune = state.tune
+  const results = []
+
+  io.emit('scanStart')
+
+  for (let ch = 0; ch <= 37; ch++) {
+    if (!scanning) break
+    port.write(`TUNE=${ch}\n`)
+
+    await sleepMs(ch === 0 ? 2000 : 1000) 
+
+    const sig  = parseFloat(state.signal?.SIGNAL) || 0
+    const lock = state.signal?.LOCK === '1'
+
+    const result = { ch, name: DAB_CHANNELS_SCAN[ch].name, freq: DAB_CHANNELS_SCAN[ch].freq, signal: sig, lock }
+    results.push(result)
+    io.emit('scanProgress', { ch, total: 37, result })  // ? io
+  }
+
+  if (originalTune !== null) {
+    port.write(`TUNE=${originalTune}\n`)
+    state.tune = String(originalTune)
+    io.emit('tune', state.tune)
+  }
+
+  scanning = false
+  state.scanResults = results
+  const found = results.filter(r => r.lock).length
+  io.emit('scanComplete', results)
+  state.scanning = false
+}
 
 // ================= AUDIO STREAM =================
 let audioRunning = false
@@ -333,7 +399,7 @@ function startAudio() {
     '-f', 'S16_LE',
     '-r', String(config.audio.sampleRate),
     '-c', String(config.audio.channels),
-    '-t','raw'
+    '-t', 'raw'
   ])
 
   const ffmpeg = spawn('ffmpeg', [
@@ -360,13 +426,12 @@ function startAudio() {
   arecord.stdout.pipe(ffmpeg.stdin)
 
   ffmpeg.stdout.on('data', chunk => {
-    io.emit('audio', chunk)         // ? Socket.io pentru desktop
-    audioEmitter.emit('chunk', chunk) // ? HTTP stream pentru iOS
+    io.emit('audio', chunk)
+    audioEmitter.emit('chunk', chunk)
   })
 
-  ffmpeg.stderr.on('data', d => {
-    // console.error('ffmpeg:', d.toString())
-  })
+  ffmpeg.stderr.on('data', d => {}
+  )
 
   function cleanup(reason) {
     if (!audioRunning) return
