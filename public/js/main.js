@@ -112,7 +112,6 @@ function togglePlay() {
   isPlaying = !isPlaying
   if (isPlaying) {
     pcControls.classList.add('pc-playing-state')
-    // goleste buffer-ul acumulat
     queue.length = 0
     if (sourceBuffer && !sourceBuffer.updating && mediaSourceObj.readyState === 'open') {
       try {
@@ -181,16 +180,31 @@ function updateTuneDisplay(tune) {
 function setRadioText(text) {
   const el = document.getElementById('pcRtText')
   text = text.replace(/^[\s\-–—]+/, '').trim()
+
+  function makeLine(str, color) {
+    const span = document.createElement('span')
+    span.className = 'rt-line'
+    span.style.color = color || ''
+    span.textContent = str
+    el.appendChild(span)
+    if (span.scrollWidth > el.clientWidth) {
+      span.className = 'rt-line scrolling'
+      span.textContent = str + '\u00a0\u00a0\u00a0\u00a0\u00a0' + str
+    }
+  }
+
+  el.innerHTML = ''
   const parts = text.split(' - ')
   if (parts.length >= 2) {
     const artist = parts[0].trim()
     const track = parts.slice(1).join(' - ').trim()
     if (artist && track) {
-      el.innerHTML = `<span style="display:block; color:#e6edf3;">${artist}</span><span style="display:block;">${track}</span>`
+      makeLine(artist, '#e6edf3')
+      makeLine(track, '')
       return
     }
   }
-  el.textContent = text
+  makeLine(text, '')
 }
 
 function setAudioType(type) {

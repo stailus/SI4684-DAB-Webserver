@@ -9,7 +9,7 @@
   --accent2:   #00ff88;
   --accent3:   #ff6b35;
   --text:      #c9d1d9;
-  --text-dim:  #4a5568;
+  --text-dim:  #FFFFFF;
   --text-bright: #e6edf3;
   --green:     #00e676;
   --red:       #e53935;
@@ -355,10 +355,27 @@ body::before {
 
 .rt-text {
   font-size: 16px;
-  color: #ffffff;
+  color: var(--text-dim);
+  overflow: hidden;
+}
+
+.rt-line {
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: block;
+}
+
+.rt-line.scrolling {
+  animation: scrollRT 10s linear infinite;
+  display: inline-block;
+  min-width: 100%;
+}
+
+@keyframes scrollRT {
+  0%   { transform: translateX(0); }
+  20%  { transform: translateX(0); }
+  80%  { transform: translateX(calc(-50% - 20px)); }
+  100% { transform: translateX(calc(-50% - 20px)); }
 }
 
 /* controls */
