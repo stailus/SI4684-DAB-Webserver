@@ -2,6 +2,7 @@
 
 The Si4686 DAB Webserver can be used with the SI4684-DAB-Receiver project (https://github.com/PE5PVB/SI4684-DAB-Receiver). It requires connecting the ESP32 to a USB port and the sound output to a sound card that has an input. 
 ---
+<img width="1914" height="913" alt="image" src="https://github.com/user-attachments/assets/1d7d121f-9042-4ac5-aac5-dc783305b2e8" />
 
 ## Features
 

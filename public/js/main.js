@@ -264,6 +264,7 @@ socket.on('service', data => {
   const type = data.type !== undefined ? data.type : null
   activeService = String(id)
   servicesDropdown.value = String(id)
+  queue.length = 0
   setTimeout(() => {
     document.getElementById('pcStationTitle').textContent = getStationName(id)
   }, 500)
@@ -641,6 +642,11 @@ socket.on('activeService', data => {
   document.querySelectorAll('.svc-scan-item').forEach(el => {
     el.classList.toggle('active', el.dataset.ch == data.ch && el.dataset.svcId == data.id)
   })
+})
+
+socket.on('connectionCount', count => {
+  const el = document.getElementById('connectionCount')
+  if (el) el.textContent = count + (count === 1 ? ' User Onlnie' : ' Users Online')
 })
 
 // init

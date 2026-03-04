@@ -301,18 +301,20 @@ let connectionCount = 0
 
 io.on('connection', socket => {
   connectionCount++
+  io.emit('connectionCount', connectionCount)
   const rawIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address
   const ip = rawIp.replace('::ffff:', '').split(',')[0].trim()
 
   const geo = geoip.lookup(ip)
   let location = 'Unknown'
   if (geo) location = `${geo.city || 'Unknown city'}, ${geo.region || ''}, ${geo.country || ''}`
-
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} Web client connected (${ip === '::1' ? 'localhost' : ip}) [${connectionCount}] Location: ${location}`)
 
   socket.on('disconnect', reason => {
     connectionCount--
+    io.emit('connectionCount', connectionCount)
     console.log(`${getTimestamp()} ${colors.yellow}[INFO]${colors.reset} Web client disconnected (${ip}) [${connectionCount}] Reason: ${reason}`)
+
   })
 
   const defaultImg = fs.readFileSync('./public/images/default.jpg').toString('base64')
