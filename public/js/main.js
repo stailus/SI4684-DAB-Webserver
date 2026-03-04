@@ -646,8 +646,23 @@ socket.on('activeService', data => {
 
 socket.on('connectionCount', count => {
   const el = document.getElementById('connectionCount')
-  if (el) el.textContent = count + (count === 1 ? ' User Onlnie' : ' Users Online')
+  if (el) el.textContent = count + (count === 1 ? ' User Online' : ' Users Online')
 })
+
+document.getElementById('slideshow').addEventListener('click', () => {
+  const src = document.getElementById('slideshow').src
+  if (!src || src.endsWith('default.jpg')) return
+  const overlay = document.createElement('div')
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:9999;cursor:pointer;'
+  const img = document.createElement('img')
+  img.src = src
+//  img.style.cssText = 'max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 0 40px rgba(0,210,255,0.3);'
+  img.style.cssText = 'width:40vw;border-radius:8px;box-shadow:0 0 40px rgba(0,210,255,0.3);'
+  overlay.appendChild(img)
+  overlay.onclick = () => document.body.removeChild(overlay)
+  document.body.appendChild(overlay)
+})
+
 
 // init
 populateTuneDropdown(null)
