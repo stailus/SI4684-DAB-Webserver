@@ -4,12 +4,15 @@
     "baudRate": 1000000
   },
   "audio": {
-    "device": "plughw:0,0",
+    "device": "plughw:sndrpihifiberry",
     "sampleRate": 48000,
     "channels": 2,
     "bitrate": "128k"
   },
   "server": {
     "port": 3000
+  },
+   "scan": {
+    "autoScanOnStart": true
   }
 }

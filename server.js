@@ -35,16 +35,12 @@ app.get('/stream', (req, res) => {
   res.setHeader('Transfer-Encoding', 'chunked')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('X-Content-Type-Options', 'nosniff')
-
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').replace('::ffff:', '').split(',')[0].trim()
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} HTTP stream connected (${ip})`)
-
   const onChunk = chunk => {
     try { res.write(chunk) } catch(e) {}
   }
-
   audioEmitter.on('chunk', onChunk)
-
   req.on('close', () => {
     audioEmitter.off('chunk', onChunk)
     console.log(`${getTimestamp()} ${colors.yellow}[INFO]${colors.reset} HTTP stream disconnected (${ip})`)
@@ -72,8 +68,9 @@ const state = {
   signal:       {},
   slideshow:    null,
   enabled:      false,
-  scanResults: [],
-  scanning: false
+  scanResults: new Array(38).fill(null),
+  scanning:     false,
+  scanStatus: null
 }
 
 // ================= SLIDESHOW BUFFER =================
@@ -91,6 +88,7 @@ function resetMuxState() {
   state.slideshow    = null
   slideshowChunks = []
   collectingBase64   = false
+  state._cachedServicesList = null
   io.emit('muxReset')
 
   if (!scanning) {
@@ -112,6 +110,15 @@ function getTimestamp() {
   return `[${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}]`
 }
 
+// ================= HELPER: scanResults compact 38 elemente =================
+function getScanResultsCompact() {
+  const result = []
+  for (let i = 0; i < 38; i++) {
+    result.push(state.scanResults[i] || null)
+  }
+  return result
+}
+
 // ================= ENABLE LA PORNIRE =================
 port.on('open', () => {
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} Port Serial ${port.path} opened`)
@@ -120,6 +127,9 @@ port.on('open', () => {
     port.write('ENABLE=1\n')
     state.enabled = true
     console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} SI4686 DAB Receiver enabled`)
+    if (config.scan?.autoScanOnStart) {
+      setTimeout(() => startScan({ emit: () => {} }), 3000)
+    }
   }, 300)
 })
 
@@ -136,40 +146,38 @@ parser.on('data', raw => {
   const line = raw.trim()
   if (!line) return
 
-if (collectingBase64) {
-  if (line.startsWith('$') || line.startsWith('*')) {
-    collectingBase64 = false
-    const buf = slideshowChunks.join('')
+  if (collectingBase64) {
+    if (line.startsWith('$') || line.startsWith('*')) {
+      collectingBase64 = false
+      const buf = slideshowChunks.join('')
+      slideshowChunks = []
+      setImmediate(() => {
+        state.slideshow = buf
+        if (buf) io.emit('image', buf)
+      })
+    } else {
+      slideshowChunks.push(line)
+      return
+    }
+  }
+
+  if (line.startsWith('BASE64=')) {
+    collectingBase64 = true
     slideshowChunks = []
-    setImmediate(() => {
-      state.slideshow = buf
-      if (buf) io.emit('image', buf)
-    })
-  } else {
-    slideshowChunks.push(line)
     return
   }
-}
 
-if (line.startsWith('BASE64=')) {
-  collectingBase64 = true
-  slideshowChunks = []
-  return
-}
-
-
-if (line.startsWith('*SERVICE=')) {
-  state.service     = line.slice(9).trim()
-  state.serviceType = getServiceType(state.service)
-  state.slideshow   = null
-  io.emit('service', { id: state.service, type: state.serviceType })
-  
-  if (!scanning) {
-    state.slideshow = null
-    io.emit('image', fs.readFileSync('./public/images/default.jpg').toString('base64'))
+  if (line.startsWith('*SERVICE=')) {
+    state.service     = line.slice(9).trim()
+    state.serviceType = getServiceType(state.service)
+    state.slideshow   = null
+    io.emit('service', { id: state.service, type: state.serviceType })
+    if (!scanning) {
+      state.slideshow = null
+      io.emit('image', fs.readFileSync('./public/images/default.jpg').toString('base64'))
+    }
+    return
   }
-  return
-}
 
   if (line.startsWith('*TUNE=')) {
     const newTune = line.slice(6).trim()
@@ -183,39 +191,67 @@ if (line.startsWith('*SERVICE=')) {
 
   if (line.startsWith('$M=')) return
 
-  if (line.startsWith('$L=')) {
-    const content = line.slice(3)
-    const [headerPart, servicesPartRaw] = content.split(';SERVICES=')
-    const headerParts = headerPart.split(',')
 
-    const ensembleField = headerParts.find(x => x.startsWith('ENSEMBLE='))
-    if (ensembleField) state.ensemble = ensembleField.slice(9).trim()
-
-    const ensembleIndex = headerParts.indexOf(ensembleField)
-    if (ensembleIndex !== -1 && headerParts[ensembleIndex + 1]) {
-      state.ensembleName = headerParts[ensembleIndex + 1].trim()
-    }
-
-    if (servicesPartRaw) {
-      state.servicesList = servicesPartRaw.split(';').map(s => {
-        const parts = s.split(',')
-        return { id: parts[0]?.trim(), type: parts[1]?.trim(), name: parts.slice(2).join(',').trim() }
-      }).filter(s => s.id !== undefined && s.name)
-    }
-
-    if (state.service && !state.serviceType) {
-      state.serviceType = getServiceType(state.service)
-    }
-
-    io.emit('ensembleInfo', { ensemble: state.ensemble, ensembleName: state.ensembleName })
-
-    const newListJson = JSON.stringify(state.servicesList)
-    if (state._cachedServicesList !== newListJson) {
-      state._cachedServicesList = newListJson
-      io.emit('servicesList', state.servicesList)
-    }
-    return
+if (line.startsWith('$L=')) {
+  const content = line.slice(3)
+  const [headerPart, servicesPartRaw] = content.split(';SERVICES=')
+  const headerParts = headerPart.split(',')
+  const ensembleField = headerParts.find(x => x.startsWith('ENSEMBLE='))
+  if (ensembleField) state.ensemble = ensembleField.slice(9).trim()
+  const ensembleIndex = headerParts.indexOf(ensembleField)
+  if (ensembleIndex !== -1 && headerParts[ensembleIndex + 1]) {
+    state.ensembleName = headerParts[ensembleIndex + 1].trim()
   }
+  if (servicesPartRaw) {
+    state.servicesList = servicesPartRaw.split(';').map(s => {
+      const parts = s.split(',')
+      return { id: parts[0]?.trim(), type: parts[1]?.trim(), name: parts.slice(2).join(',').trim() }
+    }).filter(s => s.id !== undefined && s.name)
+  }
+  if (state.service && !state.serviceType) {
+    state.serviceType = getServiceType(state.service)
+  }
+  io.emit('ensembleInfo', { ensemble: state.ensemble, ensembleName: state.ensembleName })
+  const newListJson = JSON.stringify(state.servicesList)
+    state._cachedServicesList = newListJson
+    io.emit('servicesList', state.servicesList)
+
+  if (!scanning && state.tune !== null) {
+    const ch = parseInt(state.tune)
+    if (!isNaN(ch)) {
+      if (state.scanResults[ch] && state.ensemble &&
+          state.scanResults[ch].ensembleId &&
+          state.scanResults[ch].ensembleId !== state.ensemble) {
+          state.scanResults[ch] = null
+      }
+      if (!state.scanResults[ch]) {
+        state.scanResults[ch] = {
+          ch,
+          name:       DAB_CHANNELS_SCAN[ch].name,
+          freq:       DAB_CHANNELS_SCAN[ch].freq,
+          signal:     parseFloat(state.signal?.SIGNAL) || 0,
+          lock:       true,
+          ensemble:   state.ensembleName,
+          ensembleId: state.ensemble,
+          services:   []
+        }
+      }
+      const newServices = state.servicesList
+       .filter(s => AUDIO_MODES_SERVER.includes(s.type))
+       .map(s => ({ id: s.id, name: s.name, type: s.type }))
+       if (newServices.length > 0) {
+          if (newServices.length >= (state.scanResults[ch].services?.length || 0)) {
+          state.scanResults[ch].ensemble   = state.ensembleName
+          state.scanResults[ch].ensembleId = state.ensemble
+          state.scanResults[ch].lock       = true
+          state.scanResults[ch].services   = newServices
+          io.emit('scanResultsUpdated', getScanResultsCompact())
+        }
+      }
+    }
+  }
+ return
+}
 
   if (line.startsWith('$I=')) {
     const obj = {}
@@ -247,6 +283,15 @@ if (line.startsWith('*SERVICE=')) {
     })
     state.signal = obj
     io.emit('signal', obj)
+
+    if (state.tune !== null) {
+      const ch = parseInt(state.tune)
+      if (!isNaN(ch) && state.scanResults[ch]) {
+        state.scanResults[ch].signal = parseFloat(obj.SIGNAL) || 0
+        state.scanResults[ch].lock   = obj.LOCK === '1'
+        io.emit('scanUpdate', { ch, signal: state.scanResults[ch].signal, lock: obj.LOCK === '1' })
+      }
+    }
     return
   }
 })
@@ -271,16 +316,23 @@ io.on('connection', socket => {
   })
 
   const defaultImg = fs.readFileSync('./public/images/default.jpg').toString('base64')
-  const stateWithImg = { ...state, slideshow: state.slideshow || defaultImg }
-  
+  const stateWithImg = {
+    ...state,
+    slideshow:   state.slideshow || defaultImg,
+    scanResults: getScanResultsCompact()
+  }
+
   if (!state.service) {
     setTimeout(() => socket.emit('fullState', stateWithImg), 2000)
   } else {
     socket.emit('fullState', stateWithImg)
   }
+
   socket.on('setService', id => {
     console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} setService: ${id} from (${ip})`)
     port.write(`SERVICE=${id}\n`)
+    const ch = parseInt(state.tune)
+    io.emit('activeService', { ch, id: String(id) })
   })
 
   socket.on('setTune', channel => {
@@ -329,6 +381,7 @@ const DAB_CHANNELS_SCAN = [
   { ch:34, name:'13C', freq:234.208 }, { ch:35, name:'13D', freq:235.776 },
   { ch:36, name:'13E', freq:237.488 }, { ch:37, name:'13F', freq:239.200 }
 ]
+const AUDIO_MODES_SERVER = ['4', '5']
 
 let scanning = false
 
@@ -336,15 +389,23 @@ async function sleepMs(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+async function waitForLock(maxMs) {
+  const start = Date.now()
+  while (Date.now() - start < maxMs) {
+    if (state.signal?.LOCK === '1') return true
+    await sleepMs(100)
+  }
+  return false
+}
+
 async function startScan(socket) {
   state.scanning = true
   state.signal = {}
-
   try {
     const defaultImg = fs.readFileSync('./public/images/default.jpg')
     io.emit('image', defaultImg.toString('base64'))
   } catch(e) {
-     console.log('Error loading default image:', e.message)
+    console.log('Error loading default image:', e.message)
   }
 
   if (scanning) {
@@ -359,16 +420,28 @@ async function startScan(socket) {
 
   for (let ch = 0; ch <= 37; ch++) {
     if (!scanning) break
-    port.write(`TUNE=${ch}\n`)
 
-    await sleepMs(ch === 0 ? 2000 : 1000) 
+    port.write(`TUNE=${ch}\n`)
+    state.signal = {}
+    const locked = await waitForLock(ch === 0 ? 2000 : 1200)
+    if (locked) await sleepMs(1500)
 
     const sig  = parseFloat(state.signal?.SIGNAL) || 0
     const lock = state.signal?.LOCK === '1'
 
-    const result = { ch, name: DAB_CHANNELS_SCAN[ch].name, freq: DAB_CHANNELS_SCAN[ch].freq, signal: sig, lock }
+    const result = {
+      ch,
+      name:     DAB_CHANNELS_SCAN[ch].name,
+      freq:     DAB_CHANNELS_SCAN[ch].freq,
+      signal:   sig,
+      lock,
+      ensemble: lock ? (state.ensembleName || null) : null,
+      services: lock ? state.servicesList
+        .filter(s => AUDIO_MODES_SERVER.includes(s.type))
+        .map(s => ({ id: s.id, name: s.name, type: s.type })) : []
+    }
     results.push(result)
-    io.emit('scanProgress', { ch, total: 37, result })  // ? io
+    io.emit('scanProgress', { ch, total: 37, result })
   }
 
   if (originalTune !== null) {
@@ -377,19 +450,31 @@ async function startScan(socket) {
     io.emit('tune', state.tune)
   }
 
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i]
+    if (!state.scanResults[i]) {
+      state.scanResults[i] = r
+    } else {
+      state.scanResults[i].signal = r.signal
+      if (r.services.length > 0) {
+        state.scanResults[i].services = r.services
+        state.scanResults[i].lock     = true
+        state.scanResults[i].ensemble = r.ensemble
+      }
+    }
+  }
   scanning = false
-  state.scanResults = results
-  const found = results.filter(r => r.lock).length
-  io.emit('scanComplete', results)
   state.scanning = false
+  const compact = getScanResultsCompact()
+  const found = compact.filter(r => r && r.services && r.services.length > 0).length
+  state.scanStatus = `Done · ${found} found`
+  io.emit('scanComplete', compact)
 }
 
 // ================= AUDIO STREAM =================
 let audioRunning = false
-
 function startAudio() {
   if (audioRunning) {
-    console.log(`${getTimestamp()} ${colors.yellow}[WARN]${colors.reset} startAudio apelat dar deja ruleaza, skip`)
     return
   }
   audioRunning = true
@@ -430,8 +515,7 @@ function startAudio() {
     audioEmitter.emit('chunk', chunk)
   })
 
-  ffmpeg.stderr.on('data', d => {}
-  )
+  ffmpeg.stderr.on('data', d => {})
 
   function cleanup(reason) {
     if (!audioRunning) return
@@ -447,10 +531,10 @@ function startAudio() {
   arecord.on('error', (e) => cleanup(`arecord error: ${e.message}`))
   ffmpeg.on('error',  (e) => cleanup(`ffmpeg error: ${e.message}`))
 }
-
 startAudio()
 
 // ================= START SERVER =================
 server.listen(config.server.port, () => {
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} Server running on http://localhost:${config.server.port}`)
 })
+

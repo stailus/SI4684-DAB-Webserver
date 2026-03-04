@@ -14,7 +14,7 @@
   <div class="header-logo">Si4686 <span>DAB Webserver</span></div>
   <div class="header-status">
     <span id="headerEnsemble">-</span>
-    <span style="color: var(--border)">|</span>
+    <span>|</span>
     <span id="headerTune"> - </span>
   </div>
 </div>
@@ -31,7 +31,7 @@
   <div class="signal-graph-wrap" style="grid-column: 1 / -1;">
     <div class="signal-graph-header">
       <div class="signal-graph-title">Signal Strength</div>
-      <div class="signal-graph-value" id="signalBig">—<span>dBuV</span></div>
+      <div class="signal-graph-value" id="signalBig">-<span>dBuV</span></div>
     </div>
     <canvas id="signalCanvas" height="70"></canvas>
   </div>
@@ -72,7 +72,7 @@
       <div class="ensemble-name" id="ensemble">-</div>
       <div class="ensemble-id" id="ensembleId">-</div>
       <div class="divider"></div>
-      <div class="panel-title">Service</div>
+      <div class="panel-title">Services</div>
       <div class="svc-select-wrap">
         <select id="services"></select>
         <button class="btn" onclick="changeService()">Select</button>
@@ -104,7 +104,7 @@
           </div>
         </div>
         <div style="display:flex; align-items:center; gap:16px; margin-top:10px;">
-          <div class="audio-type-badge" id="pcAudioType">DAB+</div>
+          <div class="audio-type-badge" id="pcAudioType">-</div>
         </div>
       </div>
 
@@ -160,6 +160,13 @@
           <div class="sig-value" id="ficVal">—</div>
         </div>
       </div>
+    </div>
+  </div>
+<!-- COL SERVICES -->
+  <div class="col-services" style="display:flex; flex-direction:column; gap:16px; height: 365px; position: sticky; top: 60px;">
+    <div class="panel" style="flex:1; overflow:hidden;">
+      <div class="panel-title">Services</div>
+      <div id="servicesScanList"></div>
     </div>
   </div>
 </div>

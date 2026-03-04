@@ -58,7 +58,6 @@ const canvas = document.getElementById('signalCanvas')
 const ctx = canvas.getContext('2d')
 const signalHistory = []
 const MAX_POINTS = 200
-
 function resizeCanvas() {
   canvas.width = canvas.offsetWidth
   canvas.height = 70
@@ -119,7 +118,7 @@ function togglePlay() {
         sourceBuffer.remove(0, Infinity)
       } catch(e) {}
     }
-    audio.play()
+	audio.play()
   } else {
     pcControls.classList.remove('pc-playing-state')
     audio.pause()
@@ -172,14 +171,14 @@ socket.on('tuneError', msg => alert(msg))
 function updateTuneDisplay(tune) {
   const ch = getChannelByIndex(tune)
   document.getElementById('tuneChannel').textContent = ch ? ch.name : `CH ${tune}`
-  document.getElementById('tuneFreq').innerHTML = ch ? `${ch.freq}<span>MHz</span>` : `—<span>MHz</span>`
+  document.getElementById('tuneFreq').innerHTML = ch ? `${ch.freq}<span>MHz</span>` : `\u2014<span>MHz</span>`
   document.getElementById('headerTune').textContent = ch ? `${ch.name} \u00b7 ${ch.freq} MHz` : `CH ${tune}`
 }
 
 // ===== RADIO TEXT =====
 function setRadioText(text) {
   const el = document.getElementById('pcRtText')
-  text = text.replace(/^[\s\-–—]+/, '').trim()
+  text = text.replace(/^[\s\-\ufffd]+/, '').trim()
 
   function makeLine(str, color) {
     const span = document.createElement('span')
@@ -217,6 +216,14 @@ function getStationName(id) {
   return opt ? opt.text : id
 }
 
+// ===== HELPER: remarcare item activ in lista =====
+function markActiveServiceInList() {
+  const currentCh = parseInt(document.getElementById('tuneSelect').value)
+  document.querySelectorAll('.svc-scan-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.ch == currentCh && el.dataset.svcId == activeService)
+  })
+}
+
 // ===== SOCKET EVENTS =====
 const servicesDropdown = document.getElementById('services')
 const img = document.getElementById('slideshow')
@@ -239,9 +246,14 @@ socket.on('fullState', state => {
     scanResults = state.scanResults
     drawScanChart(scanResults)
     updateScanChannels(scanResults)
+    renderServicesScanList(scanResults)
+    markActiveServiceInList()
   }
   if (state.scanning) {
     document.getElementById('scanOverlay').classList.add('active')
+  }
+  if (state.scanStatus) {
+    document.getElementById('scanStatus').textContent = state.scanStatus
   }
 })
 
@@ -252,13 +264,49 @@ socket.on('service', data => {
   const type = data.type !== undefined ? data.type : null
   activeService = String(id)
   servicesDropdown.value = String(id)
-  document.getElementById('pcStationTitle').textContent = getStationName(id)
+  setTimeout(() => {
+    document.getElementById('pcStationTitle').textContent = getStationName(id)
+  }, 500)
   if (type) setAudioType(type)
+  markActiveServiceInList()
 })
 
 socket.on('ensembleInfo', data => updateEnsemble(data.ensemble, data.ensembleName))
 socket.on('dynamicLabel', text => setRadioText(text))
-socket.on('signal', updateSignal)
+
+socket.on('signal', data => {
+  updateSignal(data)
+  const tuneEl = document.getElementById('tuneSelect')
+  if (tuneEl && scanResults.length > 0) {
+    const ch = parseInt(tuneEl.value)
+    if (!isNaN(ch) && scanResults[ch]) {
+      scanResults[ch].signal = parseFloat(data.SIGNAL) || 0
+      drawScanChart(scanResults)
+    }
+  }
+})
+
+socket.on('scanUpdate', data => {
+  if (scanResults[data.ch]) {
+    scanResults[data.ch].signal = data.signal
+    scanResults[data.ch].lock   = data.lock
+    drawScanChart(scanResults)
+  }
+})
+
+socket.on('scanResultsUpdated', results => {
+  if (scanRunning) return
+  const prevJson = JSON.stringify(scanResults.filter(r => r && r.services?.length > 0).map(r => r.services.map(s => s.id).join(',')))
+  scanResults = results
+  const newJson = JSON.stringify(scanResults.filter(r => r && r.services?.length > 0).map(r => r.services.map(s => s.id).join(',')))
+  drawScanChart(scanResults)
+  if (prevJson !== newJson) {
+    renderServicesScanList(scanResults)
+    markActiveServiceInList()
+  } else {
+    markActiveServiceInList()
+  }
+})
 
 socket.on('image', base64 => {
   img.src = 'data:image/jpeg;base64,' + base64
@@ -268,7 +316,6 @@ socket.on('serviceInfo', info => {
   renderServiceInfo(info)
   if (info.TYPE) setAudioType(info.TYPE)
 })
-
 socket.on('muxReset', () => {
   document.getElementById('pcStationTitle').textContent = '-'
   document.getElementById('pcEnsembleName').textContent = '-'
@@ -389,7 +436,7 @@ function renderServiceInfo(info) {
     }
 
     container.innerHTML += `
-      <div class="svc-info-row">
+	<div class="svc-info-row">
         <div class="svc-info-label">${SERVICE_INFO_LABELS[key] || key}</div>
         <div class="${extraClass}">${displayValue}</div>
       </div>`
@@ -429,6 +476,8 @@ function toggleScan() {
 
 socket.on('scanStart', () => {
   scanRunning = true
+  scanResults = []
+  drawScanChart([])
   document.getElementById('scanBtn').textContent = 'Stop'
   const status = document.getElementById('scanStatus')
   document.getElementById('scanOverlay').classList.add('active')
@@ -437,11 +486,16 @@ socket.on('scanStart', () => {
 })
 
 socket.on('scanProgress', data => {
-  scanResults[data.ch] = data.result
-  drawScanChart(scanResults)
+  if (!scanResults[data.ch]) scanResults[data.ch] = data.result
+  else scanResults[data.ch] = data.result
+  const compact = []
+  for (let i = 0; i < 38; i++) {
+    compact[i] = scanResults[i] || { ch: i, name: '', signal: 0, lock: false, services: [] }
+  }
+  drawScanChart(compact)
   document.getElementById('scanStatus').textContent = `${data.result.name} \u00b7 ${data.ch + 1}/38`
   document.getElementById('scanOverlaySub').textContent = `${data.result.name} \u00b7 ${data.ch + 1}/38`
-  updateScanChannels(scanResults)
+  updateScanChannels(compact)
 })
 
 socket.on('scanComplete', results => {
@@ -449,9 +503,11 @@ socket.on('scanComplete', results => {
   scanResults = results
   drawScanChart(results)
   updateScanChannels(results)
+  renderServicesScanList(results)
+  markActiveServiceInList()
   document.getElementById('scanBtn').textContent = 'Scan'
   document.getElementById('scanOverlay').classList.remove('active')
-  const found = results.filter(r => r.lock).length
+  const found = results.filter(r => r && r.services && r.services.length > 0).length
   const status = document.getElementById('scanStatus')
   status.textContent = `Done \u00b7 ${found} found`
   status.className = 'scan-status'
@@ -469,12 +525,13 @@ function drawScanChart(results) {
 
   if (!results || results.length === 0) return
 
-const total = 38
-  const barW = Math.max(2, Math.floor((W - total * 2) / total))
+  const total = 38
+  const barW = Math.floor(W / 38) - 1.40
   const maxSig = 80
 
-  results.forEach((r, i) => {
-    if (!r) return
+  for (let i = 0; i < 38; i++) {
+    const r = results[i]
+    if (!r) continue
     const x = i * (barW + 2) + 1
     const sig = Math.max(0, r.signal || 0)
     const h = Math.max(2, (sig / maxSig) * (H - 16))
@@ -494,13 +551,13 @@ const total = 38
     scanCtx.fillStyle = (r.lock && sig > 3) ? color : '#ffffff'
     scanCtx.font = '12px Share Tech Mono'
     scanCtx.textAlign = 'center'
-    scanCtx.fillText(r.name, x + barW / 2, y - 2)
-  })
+    if (r.name) scanCtx.fillText(r.name, x + barW / 2, y - 2)
+  }
   scanCtx.strokeStyle = 'rgba(0,210,255,0.1)'
   scanCtx.lineWidth = 1
   scanCtx.beginPath()
   scanCtx.moveTo(0, H - 1)
-  scanCtx.lineTo(W, H - 1)
+    scanCtx.lineTo(W, H - 1)
   scanCtx.stroke()
 }
 
@@ -510,9 +567,80 @@ function updateScanChannels(results) {
 scanCanvas.addEventListener('click', e => {
   if (scanResults.length === 0) return
   const rect = scanCanvas.getBoundingClientRect()
-  const x = e.clientX - rect.left
-  const ch = Math.floor((x / scanCanvas.offsetWidth) * 38)
+  const xCSS = e.clientX - rect.left
+  const W = scanCanvas.width
+  const barW = Math.floor(W / 38) - 1.40
+  const ch = Math.floor(xCSS * (W / rect.width) / (barW + 2))
+  console.log('click xCSS:', xCSS, 'W:', W, 'rect.width:', rect.width, 'barW:', barW, 'ch:', ch)
   if (ch >= 0 && ch < 38) socket.emit('setTune', String(ch))
+})
+
+// ===== SERVICES SCAN LIST =====
+function renderServicesScanList(results) {
+  const container = document.getElementById('servicesScanList')
+  if (!container) return
+  container.innerHTML = ''
+  const withServices = results.filter(r => r && r.services && r.services.length > 0)
+  if (withServices.length === 0) {
+    container.innerHTML = '<div style="font-size:10px; color:var(--text-dim); text-align:center; padding:20px 0;">No services found</div>'
+    return
+  }
+  withServices.forEach(r => {
+    const block = document.createElement('div')
+    block.className = 'svc-scan-channel'
+    const isOpen = localStorage.getItem(`scan-ch-${r.ch}`) !== 'closed'
+    const header = document.createElement('div')
+    header.className = 'svc-scan-channel-header'
+    header.innerHTML = `
+      <div>
+        <div class="svc-scan-channel-name">${r.name}</div>
+      </div>
+      <span class="svc-scan-channel-toggle ${isOpen ? 'open' : ''}">&#9658;</span>
+    `
+    const servicesList = document.createElement('div')
+    servicesList.className = 'svc-scan-services' + (isOpen ? ' open' : '')
+    r.services.forEach(svc => {
+      const item = document.createElement('div')
+      item.className = 'svc-scan-item'
+      item.textContent = svc.name
+      item.title = svc.name
+      item.dataset.ch = r.ch
+      item.dataset.svcId = svc.id
+      item.onclick = () => tuneToService(r.ch, svc.id)
+      servicesList.appendChild(item)
+    })
+    header.onclick = () => {
+      const toggle = header.querySelector('.svc-scan-channel-toggle')
+      toggle.classList.toggle('open')
+      servicesList.classList.toggle('open')
+      localStorage.setItem(`scan-ch-${r.ch}`, servicesList.classList.contains('open') ? 'open' : 'closed')
+    }
+    block.appendChild(header)
+    block.appendChild(servicesList)
+    container.appendChild(block)
+  })
+}
+
+function tuneToService(ch, serviceId) {
+  const currentCh = parseInt(document.getElementById('tuneSelect').value)
+
+  if (currentCh === ch) {
+    socket.emit('setService', serviceId)
+  } else {
+    socket.emit('setTune', String(ch))
+    setTimeout(() => socket.emit('setService', serviceId), 3000)
+  }
+
+  document.querySelectorAll('.svc-scan-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.ch == ch && el.dataset.svcId == serviceId)
+  })
+}
+
+socket.on('activeService', data => {
+  activeService = String(data.id)
+  document.querySelectorAll('.svc-scan-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.ch == data.ch && el.dataset.svcId == data.id)
+  })
 })
 
 // init

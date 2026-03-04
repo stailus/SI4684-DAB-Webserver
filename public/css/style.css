@@ -82,7 +82,7 @@ body::before {
   z-index: 1;
   padding: 20px;
   display: grid;
-  grid-template-columns: 280px 520px 280px;
+  grid-template-columns: 280px 520px 280px 220px;
   gap: 16px;
   width: fit-content;
   margin: 0 auto;
@@ -107,7 +107,6 @@ body::before {
   border-radius: 4px;
   padding: 16px;
   position: relative;
-  overflow: hidden;
 }
 
 .panel::before {
@@ -727,6 +726,100 @@ body::before {
   50%       { opacity: 0.3; }
 }
 
+/* ===== SERVICES SCAN LIST ===== */
+.svc-scan-channel {
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.svc-scan-channel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--bg3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.svc-scan-channel-header:hover {
+  background: rgba(0,210,255,0.08);
+}
+
+.svc-scan-channel-name {
+  font-family: 'Orbitron', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 2px;
+}
+
+.svc-scan-channel-freq {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.svc-scan-channel-toggle {
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: transform 0.2s;
+}
+
+.svc-scan-channel-toggle.open {
+  transform: rotate(90deg);
+}
+
+.svc-scan-services {
+  display: none;
+}
+
+.svc-scan-services.open {
+  display: block;
+}
+
+.svc-scan-item {
+  padding: 6px 10px 6px 16px;
+  font-size: 15px;
+  color: var(--text);
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+  transition: all 0.2s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.svc-scan-item:hover {
+  background: rgba(0,210,255,0.08);
+  color: var(--accent);
+}
+
+.svc-scan-item.active {
+  color: var(--accent2);
+  border-left: 2px solid var(--accent2);
+}
+
+#servicesScanList {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.col-services .panel {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 160px);
+  position: sticky;
+  top: 60px;
+  overflow: hidden;
+}
+
+.col-services .panel .panel-title {
+  flex-shrink: 0;
+}
 /* scrollbar */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
