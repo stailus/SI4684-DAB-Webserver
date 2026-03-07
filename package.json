@@ -10,6 +10,6 @@
     "express": "^5.2.1",
     "geoip-lite": "^2.0.0",
     "serialport": "^13.0.0",
-    "socket.io": "^4.8.3"
+    "ws": "^8.19.0"
   }
 }

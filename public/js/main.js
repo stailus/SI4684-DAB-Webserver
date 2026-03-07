@@ -1,57 +1,69 @@
-const socket = io()
+// ================= WEBSOCKET =================
+let socket = null
+let wsReconnectTimer = null
+
+function wsConnect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${proto}//${location.host}/data-ws`
+  socket = new WebSocket(wsUrl)
+  socket.onopen = () => {
+    console.log('WS connected')
+    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null }
+  }
+  socket.onmessage = (event) => {
+    let msg
+    try { msg = JSON.parse(event.data) } catch(e) { return }
+    try { handleMessage(msg) } catch(e) { console.error("handleMessage error:", e) }
+  }
+  socket.onclose = () => {
+    console.warn('WS closed, reconnecting in 2s...')
+    wsReconnectTimer = setTimeout(wsConnect, 2000)
+  }
+  socket.onerror = () => {
+    socket.close()
+  }
+}
+
+function wsSend(msg) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(msg))
+  }
+}
+
+wsConnect()
+
 let activeService = 0
 
 // ===== AUDIO =====
 const audio = new Audio()
 document.body.appendChild(audio)
+let audioWs = null
+let liveAudioPlayer = null
 
-let sourceBuffer = null
-let mediaSourceObj = null
-const queue = []
-let isUpdating = false
-let mediaSourceReady = false
-
-const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-
-if (!isIOS && typeof MediaSource !== 'undefined') {
-  mediaSourceObj = new MediaSource()
-  audio.src = URL.createObjectURL(mediaSourceObj)
-
-  mediaSourceObj.addEventListener('sourceopen', () => {
-    sourceBuffer = mediaSourceObj.addSourceBuffer('audio/mpeg')
-    sourceBuffer.addEventListener('updateend', () => {
-      isUpdating = false
-      processQueue()
-    })
-    mediaSourceReady = true
-    processQueue()
-  })
-} else {
-  audio.src = '/stream'
-}
-
-function processQueue() {
-  if (!mediaSourceReady || isUpdating || queue.length === 0 || !sourceBuffer) return
-  if (mediaSourceObj.readyState !== 'open') return
-  isUpdating = true
+function connectAudioWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${proto}//${location.host}/audio-ws`
   try {
-    sourceBuffer.appendBuffer(queue.shift())
+    const logger = { Log: (msg) => { console.log('3LAS:', msg) } }
+    const settings = new Fallback_Settings()
+    settings.InitialBufferLength = 0.1
+
+    liveAudioPlayer = new Fallback(logger, settings)
+
+    const wsClient = new WebSocketClient(
+      logger,
+      wsUrl,
+      (e) => { console.log('ws error', e) },
+      () => { liveAudioPlayer.Init(wsClient) },
+      (data) => { liveAudioPlayer.FormatReader.PushData(new Uint8Array(data)) },
+      () => { if (isPlaying) setTimeout(connectAudioWs, 1000) }
+    )
+
+    audioWs = wsClient
   } catch(e) {
-    console.log('appendBuffer error:', e)
-    isUpdating = false
+    alert('Eroare: ' + e.message)
   }
 }
-
-socket.on('audio', (chunk) => {
-  if (!mediaSourceReady) return
-  if (!isPlaying) {
-    queue.length = 0
-    return
-  }
-  const uint8 = new Uint8Array(chunk)
-  queue.push(uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength))
-  processQueue()
-})
 
 // ===== SIGNAL GRAPH =====
 const canvas = document.getElementById('signalCanvas')
@@ -106,36 +118,42 @@ setInterval(drawGraph, 200)
 // ===== PLAYER UI =====
 let isPlaying = false
 const pcControls = document.getElementById('pcControls')
-
 function togglePlay() {
   isPlaying = !isPlaying
   if (isPlaying) {
     pcControls.classList.add('pc-playing-state')
-    queue.length = 0
-    if (sourceBuffer && !sourceBuffer.updating && mediaSourceObj.readyState === 'open') {
-      try {
-        sourceBuffer.abort()
-        sourceBuffer.remove(0, Infinity)
-      } catch(e) {}
+    const isAppleiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+    if (isAppleiOS && 'audioSession' in navigator) {
+      navigator.audioSession.type = "playback"
     }
-	audio.play()
+    connectAudioWs()
   } else {
     pcControls.classList.remove('pc-playing-state')
-    audio.pause()
+    const isAppleiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream
+    if (isAppleiOS && 'audioSession' in navigator) {
+      navigator.audioSession.type = "none"
+    }
+    if (audioWs) { audioWs.Socket.close(); audioWs = null }
+    liveAudioPlayer = null
   }
 }
 
 function updateVolume(val) {
   document.getElementById('pcVolValue').textContent = val
   document.getElementById('pcVolSlider').style.setProperty('--vol', val + '%')
-  audio.volume = val / 100
+  if (liveAudioPlayer?.Player) {
+    liveAudioPlayer.Player.Volume = val / 100
+  }
 }
+
 updateVolume(50)
 
 let isMuted = false
 function toggleMute() {
   isMuted = !isMuted
-  audio.muted = isMuted
+  if (liveAudioPlayer?.Player) {
+    liveAudioPlayer.Player.Volume = isMuted ? 0 : (parseInt(document.getElementById('pcVolValue').textContent) / 100)
+  }
   document.getElementById('pcVolIcon').style.color = isMuted ? '#e53935' : ''
 }
 
@@ -157,22 +175,7 @@ function populateTuneDropdown(currentTune) {
 function changeTune() {
   const ch = document.getElementById('tuneSelect').value
   if (!ch) return
-  socket.emit('setTune', ch)
-}
-
-socket.on('tune', tune => {
-  const sel = document.getElementById('tuneSelect')
-  if (sel) sel.value = String(tune)
-  updateTuneDisplay(tune)
-})
-
-socket.on('tuneError', msg => alert(msg))
-
-function updateTuneDisplay(tune) {
-  const ch = getChannelByIndex(tune)
-  document.getElementById('tuneChannel').textContent = ch ? ch.name : `CH ${tune}`
-  document.getElementById('tuneFreq').innerHTML = ch ? `${ch.freq}<span>MHz</span>` : `\u2014<span>MHz</span>`
-  document.getElementById('headerTune').textContent = ch ? `${ch.name} \u00b7 ${ch.freq} MHz` : `CH ${tune}`
+  wsSend({ type: 'setTune', channel: ch })
 }
 
 // ===== RADIO TEXT =====
@@ -216,7 +219,7 @@ function getStationName(id) {
   return opt ? opt.text : id
 }
 
-// ===== HELPER: remarcare item activ in lista =====
+// ===== HELPER: marcare item activ in lista =====
 function markActiveServiceInList() {
   const currentCh = parseInt(document.getElementById('tuneSelect').value)
   document.querySelectorAll('.svc-scan-item').forEach(el => {
@@ -224,112 +227,195 @@ function markActiveServiceInList() {
   })
 }
 
-// ===== SOCKET EVENTS =====
+// ===== MESSAGE HANDLER =====
 const servicesDropdown = document.getElementById('services')
 const img = document.getElementById('slideshow')
 
-socket.on('fullState', state => {
-  populateTuneDropdown(state.tune !== null && state.tune !== undefined ? String(state.tune) : null)
-  if (state.tune) updateTuneDisplay(state.tune)
-  if (state.servicesList?.length) populateServices(state.servicesList, state.service)
-  if (state.service) {
-    servicesDropdown.value = String(state.service)
-    document.getElementById('pcStationTitle').textContent = getStationName(state.service)
-  }
-  if (state.serviceType) setAudioType(state.serviceType)
-  if (state.ensemble || state.ensembleName) updateEnsemble(state.ensemble, state.ensembleName)
-  if (state.dynamicLabel) setRadioText(state.dynamicLabel)
-  if (state.signal) updateSignal(state.signal)
-  if (state.slideshow) img.src = 'data:image/jpeg;base64,' + state.slideshow
-  if (state.serviceInfo) renderServiceInfo(state.serviceInfo)
-  if (state.scanResults?.length) {
-    scanResults = state.scanResults
-    drawScanChart(scanResults)
-    updateScanChannels(scanResults)
-    renderServicesScanList(scanResults)
-    markActiveServiceInList()
-  }
-  if (state.scanning) {
-    document.getElementById('scanOverlay').classList.add('active')
-  }
-  if (state.scanStatus) {
-    document.getElementById('scanStatus').textContent = state.scanStatus
-  }
-})
+function handleMessage(msg) {
+  switch(msg.type) {
 
-socket.on('servicesList', list => populateServices(list, null))
+    case 'fullState':
+      populateTuneDropdown(msg.tune !== null && msg.tune !== undefined ? String(msg.tune) : null)
+      if (msg.tune) updateTuneDisplay(msg.tune)
+      if (msg.servicesList?.length) populateServices(msg.servicesList, msg.service)
+      if (msg.service) {
+        servicesDropdown.value = String(msg.service)
+        document.getElementById('pcStationTitle').textContent = getStationName(msg.service)
+      }
+      if (msg.serviceType) setAudioType(msg.serviceType)
+      if (msg.ensemble || msg.ensembleName) updateEnsemble(msg.ensemble, msg.ensembleName)
+      if (msg.dynamicLabel) setRadioText(msg.dynamicLabel)
+      if (msg.signal) updateSignal(msg.signal)
+      if (msg.slideshow) img.src = 'data:image/jpeg;base64,' + msg.slideshow
+      if (msg.serviceInfo) renderServiceInfo(msg.serviceInfo)
+      if (msg.scanResults?.length) {
+        scanResults = msg.scanResults
+        drawScanChart(scanResults)
+        updateScanChannels(scanResults)
+        renderServicesScanList(scanResults)
+        markActiveServiceInList()
+      }
+      if (msg.scanning) {
+        document.getElementById('scanOverlay').classList.add('active')
+      }
+      if (msg.scanStatus) {
+        document.getElementById('scanStatus').textContent = msg.scanStatus
+      }
+      break
 
-socket.on('service', data => {
-  const id   = data.id   !== undefined ? data.id   : data
-  const type = data.type !== undefined ? data.type : null
-  activeService = String(id)
-  servicesDropdown.value = String(id)
-  queue.length = 0
-  setTimeout(() => {
-    document.getElementById('pcStationTitle').textContent = getStationName(id)
-  }, 500)
-  if (type) setAudioType(type)
-  markActiveServiceInList()
-})
+    case 'servicesList':
+      populateServices(msg.data, null)
+      break
 
-socket.on('ensembleInfo', data => updateEnsemble(data.ensemble, data.ensembleName))
-socket.on('dynamicLabel', text => setRadioText(text))
+    case 'service':
+      activeService = String(msg.id)
+      servicesDropdown.value = String(msg.id)
+      setTimeout(() => {
+        document.getElementById('pcStationTitle').textContent = getStationName(msg.id)
+      }, 500)
+      if (msg.serviceType) setAudioType(msg.serviceType)
+      markActiveServiceInList()
+      break
 
-socket.on('signal', data => {
-  updateSignal(data)
-  const tuneEl = document.getElementById('tuneSelect')
-  if (tuneEl && scanResults.length > 0) {
-    const ch = parseInt(tuneEl.value)
-    if (!isNaN(ch) && scanResults[ch]) {
-      scanResults[ch].signal = parseFloat(data.SIGNAL) || 0
+    case 'tune':
+      const sel = document.getElementById('tuneSelect')
+      if (sel) sel.value = String(msg.data)
+      updateTuneDisplay(msg.data)
+      break
+
+    case 'tuneError':
+      alert(msg.data)
+      break
+
+    case 'ensembleInfo':
+      updateEnsemble(msg.ensemble, msg.ensembleName)
+      break
+
+    case 'dynamicLabel':
+      setRadioText(msg.data)
+      break
+
+    case 'signal':
+      updateSignal(msg.data)
+      const tuneEl = document.getElementById('tuneSelect')
+      if (tuneEl && scanResults.length > 0) {
+        const ch = parseInt(tuneEl.value)
+        if (!isNaN(ch) && scanResults[ch]) {
+          scanResults[ch].signal = parseFloat(msg.data.SIGNAL) || 0
+          drawScanChart(scanResults)
+        }
+      }
+      break
+
+    case 'scanUpdate':
+      if (scanResults[msg.ch]) {
+        scanResults[msg.ch].signal = msg.signal
+        scanResults[msg.ch].lock   = msg.lock
+        drawScanChart(scanResults)
+      }
+      break
+
+    case 'scanResultsUpdated':
+      if (scanRunning) return
+      const prevJson = JSON.stringify(scanResults.filter(r => r && r.services?.length > 0).map(r => r.services.map(s => s.id).join(',')))
+      scanResults = msg.data
+      const newJson = JSON.stringify(scanResults.filter(r => r && r.services?.length > 0).map(r => r.services.map(s => s.id).join(',')))
       drawScanChart(scanResults)
-    }
+      if (prevJson !== newJson) {
+        renderServicesScanList(scanResults)
+        markActiveServiceInList()
+      } else {
+        markActiveServiceInList()
+      }
+      break
+
+    case 'image':
+      img.src = 'data:image/jpeg;base64,' + msg.data
+      break
+
+    case 'serviceInfo':
+      renderServiceInfo(msg.data)
+      if (msg.data.TYPE) setAudioType(msg.data.TYPE)
+      break
+
+    case 'muxReset':
+      document.getElementById('pcStationTitle').textContent = '-'
+      document.getElementById('pcEnsembleName').textContent = '-'
+      document.getElementById('pcRtText').textContent = 'No data'
+      document.getElementById('pcAudioType').textContent = 'DAB+'
+      document.getElementById('ensemble').textContent = '-'
+      document.getElementById('ensembleId').textContent = '-'
+      document.getElementById('headerEnsemble').textContent = '-'
+      servicesDropdown.innerHTML = ''
+      document.getElementById('serviceInfo').innerHTML = ''
+      break
+
+    case 'scanStart':
+      scanRunning = true
+      scanResults = []
+      drawScanChart([])
+      document.getElementById('scanBtn').textContent = 'Stop'
+      document.getElementById('scanOverlay').classList.add('active')
+      const status = document.getElementById('scanStatus')
+      status.textContent = 'Scanning...'
+      status.className = 'scan-status scanning'
+      break
+
+    case 'scanProgress':
+      if (!scanResults[msg.ch]) scanResults[msg.ch] = msg.result
+      else scanResults[msg.ch] = msg.result
+      const compact = []
+      for (let i = 0; i < 38; i++) {
+        compact[i] = scanResults[i] || { ch: i, name: '', signal: 0, lock: false, services: [] }
+      }
+      drawScanChart(compact)
+      document.getElementById('scanStatus').textContent = `${msg.result.name} \u00b7 ${msg.ch + 1}/38`
+      document.getElementById('scanOverlaySub').textContent = `${msg.result.name} \u00b7 ${msg.ch + 1}/38`
+      updateScanChannels(compact)
+      break
+
+    case 'scanComplete':
+      scanRunning = false
+      scanResults = msg.data
+      drawScanChart(scanResults)
+      updateScanChannels(scanResults)
+      renderServicesScanList(scanResults)
+      markActiveServiceInList()
+      document.getElementById('scanBtn').textContent = 'Scan'
+      document.getElementById('scanOverlay').classList.remove('active')
+      const found = scanResults.filter(r => r && r.services && r.services.length > 0).length
+      const st = document.getElementById('scanStatus')
+      st.textContent = `Done \u00b7 ${found} found`
+      st.className = 'scan-status'
+      break
+
+    case 'scanError':
+      document.getElementById('scanStatus').textContent = msg.data
+      scanRunning = false
+      break
+
+    case 'activeService':
+      activeService = String(msg.id)
+      document.querySelectorAll('.svc-scan-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.ch == msg.ch && el.dataset.svcId == msg.id)
+      })
+      break
+
+    case 'connectionCount':
+      const el = document.getElementById('connectionCount')
+      if (el) el.textContent = msg.count + (msg.count === 1 ? ' User Online' : ' Users Online')
+      break
   }
-})
-
-socket.on('scanUpdate', data => {
-  if (scanResults[data.ch]) {
-    scanResults[data.ch].signal = data.signal
-    scanResults[data.ch].lock   = data.lock
-    drawScanChart(scanResults)
-  }
-})
-
-socket.on('scanResultsUpdated', results => {
-  if (scanRunning) return
-  const prevJson = JSON.stringify(scanResults.filter(r => r && r.services?.length > 0).map(r => r.services.map(s => s.id).join(',')))
-  scanResults = results
-  const newJson = JSON.stringify(scanResults.filter(r => r && r.services?.length > 0).map(r => r.services.map(s => s.id).join(',')))
-  drawScanChart(scanResults)
-  if (prevJson !== newJson) {
-    renderServicesScanList(scanResults)
-    markActiveServiceInList()
-  } else {
-    markActiveServiceInList()
-  }
-})
-
-socket.on('image', base64 => {
-  img.src = 'data:image/jpeg;base64,' + base64
-})
-
-socket.on('serviceInfo', info => {
-  renderServiceInfo(info)
-  if (info.TYPE) setAudioType(info.TYPE)
-})
-socket.on('muxReset', () => {
-  document.getElementById('pcStationTitle').textContent = '-'
-  document.getElementById('pcEnsembleName').textContent = '-'
-  document.getElementById('pcRtText').textContent = 'No data'
-  document.getElementById('pcAudioType').textContent = 'DAB+'
-  document.getElementById('ensemble').textContent = '-'
-  document.getElementById('ensembleId').textContent = '-'
-  document.getElementById('headerEnsemble').textContent = '-'
-  servicesDropdown.innerHTML = ''
-  document.getElementById('serviceInfo').innerHTML = ''
-})
+}
 
 // ===== HELPERS =====
+function updateTuneDisplay(tune) {
+  const ch = getChannelByIndex(tune)
+  document.getElementById('tuneChannel').textContent = ch ? ch.name : `CH ${tune}`
+  document.getElementById('tuneFreq').innerHTML = ch ? `${ch.freq}<span>MHz</span>` : `\u2014<span>MHz</span>`
+  document.getElementById('headerTune').textContent = ch ? `${ch.name} \u00b7 ${ch.freq} MHz` : `CH ${tune}`
+}
+
 function updateEnsemble(ensemble, ensembleName) {
   document.getElementById('ensemble').textContent = ensembleName || '-'
   document.getElementById('ensembleId').textContent = ensemble || '-'
@@ -361,7 +447,7 @@ function populateServices(list, currentService) {
 
 function changeService() {
   activeService = servicesDropdown.value
-  socket.emit('setService', servicesDropdown.value)
+  wsSend({ type: 'setService', id: servicesDropdown.value })
 }
 
 function updateSignal(data) {
@@ -437,7 +523,7 @@ function renderServiceInfo(info) {
     }
 
     container.innerHTML += `
-	<div class="svc-info-row">
+  <div class="svc-info-row">
         <div class="svc-info-label">${SERVICE_INFO_LABELS[key] || key}</div>
         <div class="${extraClass}">${displayValue}</div>
       </div>`
@@ -461,7 +547,7 @@ window.addEventListener('resize', resizeScanCanvas)
 
 function toggleScan() {
   if (scanRunning) {
-    socket.emit('stopScan')
+    wsSend({ type: 'stopScan' })
     scanRunning = false
     document.getElementById('scanBtn').textContent = 'Scan'
     document.getElementById('scanStatus').textContent = 'Stopped'
@@ -471,53 +557,9 @@ function toggleScan() {
     const sc = document.getElementById('scanChannels')
     if (sc) sc.innerHTML = ''
     drawScanChart([])
-    socket.emit('startScan')
+    wsSend({ type: 'startScan' })
   }
 }
-
-socket.on('scanStart', () => {
-  scanRunning = true
-  scanResults = []
-  drawScanChart([])
-  document.getElementById('scanBtn').textContent = 'Stop'
-  const status = document.getElementById('scanStatus')
-  document.getElementById('scanOverlay').classList.add('active')
-  status.textContent = 'Scanning...'
-  status.className = 'scan-status scanning'
-})
-
-socket.on('scanProgress', data => {
-  if (!scanResults[data.ch]) scanResults[data.ch] = data.result
-  else scanResults[data.ch] = data.result
-  const compact = []
-  for (let i = 0; i < 38; i++) {
-    compact[i] = scanResults[i] || { ch: i, name: '', signal: 0, lock: false, services: [] }
-  }
-  drawScanChart(compact)
-  document.getElementById('scanStatus').textContent = `${data.result.name} \u00b7 ${data.ch + 1}/38`
-  document.getElementById('scanOverlaySub').textContent = `${data.result.name} \u00b7 ${data.ch + 1}/38`
-  updateScanChannels(compact)
-})
-
-socket.on('scanComplete', results => {
-  scanRunning = false
-  scanResults = results
-  drawScanChart(results)
-  updateScanChannels(results)
-  renderServicesScanList(results)
-  markActiveServiceInList()
-  document.getElementById('scanBtn').textContent = 'Scan'
-  document.getElementById('scanOverlay').classList.remove('active')
-  const found = results.filter(r => r && r.services && r.services.length > 0).length
-  const status = document.getElementById('scanStatus')
-  status.textContent = `Done \u00b7 ${found} found`
-  status.className = 'scan-status'
-})
-
-socket.on('scanError', msg => {
-  document.getElementById('scanStatus').textContent = msg
-  scanRunning = false
-})
 
 function drawScanChart(results) {
   const W = scanCanvas.width
@@ -526,8 +568,7 @@ function drawScanChart(results) {
 
   if (!results || results.length === 0) return
 
-  const total = 38
-  const barW = Math.floor(W / 38) - 1.40
+  const barW = Math.floor(W / 38) - 1.47
   const maxSig = 80
 
   for (let i = 0; i < 38; i++) {
@@ -558,7 +599,7 @@ function drawScanChart(results) {
   scanCtx.lineWidth = 1
   scanCtx.beginPath()
   scanCtx.moveTo(0, H - 1)
-    scanCtx.lineTo(W, H - 1)
+  scanCtx.lineTo(W, H - 1)
   scanCtx.stroke()
 }
 
@@ -572,8 +613,7 @@ scanCanvas.addEventListener('click', e => {
   const W = scanCanvas.width
   const barW = Math.floor(W / 38) - 1.40
   const ch = Math.floor(xCSS * (W / rect.width) / (barW + 2))
-  console.log('click xCSS:', xCSS, 'W:', W, 'rect.width:', rect.width, 'barW:', barW, 'ch:', ch)
-  if (ch >= 0 && ch < 38) socket.emit('setTune', String(ch))
+  if (ch >= 0 && ch < 38) wsSend({ type: 'setTune', channel: String(ch) })
 })
 
 // ===== SERVICES SCAN LIST =====
@@ -624,45 +664,35 @@ function renderServicesScanList(results) {
 
 function tuneToService(ch, serviceId) {
   const currentCh = parseInt(document.getElementById('tuneSelect').value)
-
   if (currentCh === ch) {
-    socket.emit('setService', serviceId)
+    wsSend({ type: 'setService', id: serviceId })
   } else {
-    socket.emit('setTune', String(ch))
-    setTimeout(() => socket.emit('setService', serviceId), 3000)
+    wsSend({ type: 'setTune', channel: String(ch) })
+    setTimeout(() => wsSend({ type: 'setService', id: serviceId }), 3000)
   }
-
   document.querySelectorAll('.svc-scan-item').forEach(el => {
     el.classList.toggle('active', el.dataset.ch == ch && el.dataset.svcId == serviceId)
   })
 }
 
-socket.on('activeService', data => {
-  activeService = String(data.id)
-  document.querySelectorAll('.svc-scan-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.ch == data.ch && el.dataset.svcId == data.id)
-  })
-})
-
-socket.on('connectionCount', count => {
-  const el = document.getElementById('connectionCount')
-  if (el) el.textContent = count + (count === 1 ? ' User Online' : ' Users Online')
-})
-
-document.getElementById('slideshow').addEventListener('click', () => {
+function expandSlideshow() {
   const src = document.getElementById('slideshow').src
   if (!src || src.endsWith('default.jpg')) return
   const overlay = document.createElement('div')
   overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:9999;cursor:pointer;'
   const img = document.createElement('img')
   img.src = src
-//  img.style.cssText = 'max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 0 40px rgba(0,210,255,0.3);'
-  img.style.cssText = 'width:40vw;border-radius:8px;box-shadow:0 0 40px rgba(0,210,255,0.3);'
+  img.style.cssText = 'height: 240px;border-radius:8px;box-shadow:0 0 40px rgba(0,210,255,0.3);'
   overlay.appendChild(img)
   overlay.onclick = () => document.body.removeChild(overlay)
   document.body.appendChild(overlay)
-})
+}
 
+
+window.addEventListener('pagehide', () => {
+  if (audioWs) audioWs.Socket.close()
+  if (socket) socket.close()
+})
 
 // init
 populateTuneDropdown(null)

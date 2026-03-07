@@ -3,15 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Si4686 DAB Webserver</title>
-  <script src="/socket.io/socket.io.js"></script>
+  <title>Si4684 DAB Webserver</title>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
 
 <!-- HEADER -->
 <div class="header">
-  <div class="header-logo">Si4686 <span>DAB Webserver</span></div>
+  <div class="header-logo">Si4684 <span>DAB Webserver</span></div>
   <div class="header-status">
     <span id="headerEnsemble">-</span>
     <span>|</span>
@@ -19,7 +18,6 @@
     <span id="connectionCount">-</span>
   </div>
 </div>
-
 <div class="scan-overlay" id="scanOverlay">
   <div class="scan-overlay-text">SCAN IN PROGRESS</div>
   <div class="scan-overlay-sub" id="scanOverlaySub">Please wait...</div>
@@ -72,75 +70,9 @@
       <div class="panel-title">Ensemble</div>
       <div class="ensemble-name" id="ensemble">-</div>
       <div class="ensemble-id" id="ensembleId">-</div>
-      <div class="divider"></div>
-      <div class="panel-title">Services</div>
-      <div class="svc-select-wrap">
-        <select id="services"></select>
-        <button class="btn" onclick="changeService()">Select</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- COL CENTER - PLAYER -->
-  <div class="col-center">
-    <div class="player-panel" id="pcControls">
-      <div class="player-top">
-        <div style="display:flex; align-items:center; gap:16px;">
-          <button class="play-btn" onclick="togglePlay()">
-            <svg class="pc-icon-play" width="18" height="18" viewBox="0 0 24 24" fill="#080e14">
-              <polygon points="5,3 19,12 5,21"/>
-            </svg>
-            <svg class="pc-icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="#080e14">
-              <rect x="5" y="3" width="4" height="18" rx="1"/>
-              <rect x="15" y="3" width="4" height="18" rx="1"/>
-            </svg>
-          </button>
-          <div>
-            <div class="now-playing-label">Now Playing</div>
-            <div class="station-name" id="pcStationTitle">-</div>
-            <div class="station-ensemble" id="pcEnsembleName">-</div>
-          </div>
-          <div style="margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
-            <div class="status-dot"></div>
-          </div>
-        </div>
-        <div style="display:flex; align-items:center; gap:16px; margin-top:10px;">
-          <div class="audio-type-badge" id="pcAudioType">-</div>
-        </div>
-      </div>
-
-      <div class="rt-box" style="margin-top:12px;">
-        <div class="rt-label">Radio Text</div>
-        <div class="rt-text" id="pcRtText">No data</div>
-      </div>
-
-      <div class="vol-row">
-        <svg class="vol-icon" id="pcVolIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" onclick="toggleMute()" style="cursor:pointer;">
-          <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
-        </svg>
-        <input type="range" class="vol-slider" id="pcVolSlider" min="0" max="100" value="50" oninput="updateVolume(this.value)">
-        <span class="vol-value" id="pcVolValue">80</span>
-      </div>
-
-      <!-- Service Info -->
-      <div id="serviceInfo" class="svc-info-grid"></div>
-
-    </div>
-  </div>
-
-  <!-- COL RIGHT -->
-  <div class="col-right" style="display:flex; flex-direction:column; gap:16px;">
-
-    <!-- SLIDESHOW -->
-    <div class="panel">
-      <div class="panel-title">SlideShow</div>
-      <div class="slideshow-wrap">
-        <img id="slideshow" src="" alt="">
-      </div>
-    </div>
-
+      <select id="services" style="display:none"></select>
     <!-- SIGNAL STATUS -->
-    <div class="panel">
+      <div class="divider"></div>
       <div class="lock-row">
         <div class="panel-title" style="margin-bottom:0;">Signal Status</div>
         <div class="lock-indicator">
@@ -153,25 +85,79 @@
         <div class="sig-row">
           <div class="sig-label">MER</div>
           <div class="sig-bar-wrap"><div class="sig-bar-fill" id="cnr"></div></div>
-          <div class="sig-value" id="cnrVal">—</div>
+          <div class="sig-value" id="cnrVal">-</div>
         </div>
         <div class="sig-row">
           <div class="sig-label">QUALITY</div>
           <div class="sig-bar-wrap"><div class="sig-bar-fill" id="fic"></div></div>
-          <div class="sig-value" id="ficVal">—</div>
+          <div class="sig-value" id="ficVal">-</div>
         </div>
       </div>
     </div>
   </div>
+  <!-- COL CENTER - PLAYER -->
+  <div class="col-center">
+    <div class="player-panel" id="pcControls">
+      <!-- ROW 1: 2 COL - INFO + Slideshow -->
+      <div style="display:flex; gap:16px; align-items:stretch;">
+        <!-- COL 1: play + info -->
+        <div style="flex:1; display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; align-items:center; gap:16px;">
+            <button class="play-btn" onclick="togglePlay()">
+              <svg class="pc-icon-play" width="18" height="18" viewBox="0 0 24 24" fill="#080e14">
+                <polygon points="5,3 19,12 5,21"/>
+              </svg>
+              <svg class="pc-icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="#080e14">
+                <rect x="5" y="3" width="4" height="18" rx="1"/>
+                <rect x="15" y="3" width="4" height="18" rx="1"/>
+              </svg>
+            </button>
+            <div>
+              <div class="now-playing-label">Now Playing</div>
+              <div class="station-name" id="pcStationTitle">-</div>
+              <div class="station-ensemble" id="pcEnsembleName">-</div>
+              <div class="audio-type-badge" id="pcAudioType">-</div>
+            </div>
+          </div>
+          <div class="vol-row">
+            <svg class="vol-icon" id="pcVolIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" onclick="toggleMute()" style="cursor:pointer;">
+              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+            </svg>
+            <input type="range" class="vol-slider" id="pcVolSlider" min="0" max="100" value="50" oninput="updateVolume(this.value)">
+            <span class="vol-value" id="pcVolValue">80</span>
+          </div>
+        </div>
+        <!-- COL 2: Slideshow -->
+        <div style="flex-shrink:0;">
+          <img id="slideshow" src="" alt="" onclick="expandSlideshow()" style="height:150px; object-fit:cover; border-radius:8px; cursor:pointer; box-shadow:0 0 10px rgba(0,210,255,0.2); display:block;">
+        </div>
+      </div>
+      <!-- ROW 2: Radio Text -->
+      <div class="rt-box" style="margin-top:12px;">
+        <div class="rt-label">Radio Text</div>
+        <div class="rt-text" id="pcRtText">No data</div>
+      </div>
+      <!-- ROW 3: Service Info -->
+      <div id="serviceInfo" class="svc-info-grid"></div>
+    </div>
+  </div>
+
 <!-- COL SERVICES -->
-  <div class="col-services" style="display:flex; flex-direction:column; gap:16px; height: 365px; position: sticky; top: 60px;">
-    <div class="panel" style="flex:1; overflow:hidden;">
+  <div class="col-services" style="display:flex; flex-direction:column; gap:16px; position: sticky; top: 60px; max-height: 378px;">
+    <div class="panel" style="flex:1; overflow-y:auto;">
       <div class="panel-title">Services</div>
       <div id="servicesScanList"></div>
     </div>
   </div>
 </div>
 
+<script src="js/player/3las.helpers.js"></script>
+<script src="js/player/3las.logging.js"></script>
+<script src="js/player/3las.formatreader.js"></script>
+<script src="js/player/3las.formatreader.mpeg.js"></script>
+<script src="js/player/3las.liveaudioplayer.js"></script>
+<script src="js/player/3las.websocketclient.js"></script>
+<script src="js/player/3las.fallback.js"></script>
 <script src="/js/constants.js"></script>
 <script src="/js/main.js"></script>
 </body>

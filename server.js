@@ -2,7 +2,7 @@ const { SerialPort } = require('serialport')
 const { ReadlineParser } = require('@serialport/parser-readline')
 const express = require('express')
 const http = require('http')
-const { Server } = require('socket.io')
+const { WebSocketServer } = require('ws')
 const { spawn } = require('child_process')
 const { EventEmitter } = require('events')
 const geoip = require('geoip-lite')
@@ -11,9 +11,26 @@ const config = require('./config.json')
 
 const app = express()
 const server = http.createServer(app)
-const io = new Server(server)
-
 const logStream = fs.createWriteStream('/home/pi/serial.log', { flags: 'a' })
+
+// ================= WS DATA SERVER =================
+const wssData  = new WebSocketServer({ noServer: true })
+const wssAudio = new WebSocketServer({ noServer: true })
+
+server.on('upgrade', (request, socket, head) => {
+  if (request.url === '/data-ws') {
+    wssData.handleUpgrade(request, socket, head, ws => {
+      wssData.emit('connection', ws, request)
+    })
+  } else if (request.url === '/audio-ws') {
+    wssAudio.handleUpgrade(request, socket, head, ws => {
+      wssAudio.emit('connection', ws, request)
+    })
+  } else {
+    socket.destroy()
+  }
+})
+
 
 const colors = {
   reset:  '\x1b[0m',
@@ -28,24 +45,6 @@ app.use(express.static('public'))
 // ================= AUDIO EMITTER =================
 const audioEmitter = new EventEmitter()
 audioEmitter.setMaxListeners(50)
-
-// ================= HTTP STREAM ENDPOINT (for iOS) =================
-app.get('/stream', (req, res) => {
-  res.setHeader('Content-Type', 'audio/mpeg')
-  res.setHeader('Transfer-Encoding', 'chunked')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').replace('::ffff:', '').split(',')[0].trim()
-  console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} HTTP stream connected (${ip})`)
-  const onChunk = chunk => {
-    try { res.write(chunk) } catch(e) {}
-  }
-  audioEmitter.on('chunk', onChunk)
-  req.on('close', () => {
-    audioEmitter.off('chunk', onChunk)
-    console.log(`${getTimestamp()} ${colors.yellow}[INFO]${colors.reset} HTTP stream disconnected (${ip})`)
-  })
-})
 
 // ================= SERIAL PORT =================
 const port = new SerialPort({
@@ -68,14 +67,24 @@ const state = {
   signal:       {},
   slideshow:    null,
   enabled:      false,
-  scanResults: new Array(38).fill(null),
+  scanResults:  new Array(38).fill(null),
   scanning:     false,
-  scanStatus: null
+  scanStatus:   null
 }
 
 // ================= SLIDESHOW BUFFER =================
 let slideshowChunks = []
 let collectingBase64 = false
+
+// ================= HELPER: broadcast la toti clientii data =================
+function broadcast(msg) {
+  const str = JSON.stringify(msg)
+  wssData.clients.forEach(ws => {
+    if (ws.readyState === ws.OPEN) {
+      try { ws.send(str) } catch(e) {}
+    }
+  })
+}
 
 // ================= HELPER: reset la schimbare mux =================
 function resetMuxState() {
@@ -86,14 +95,14 @@ function resetMuxState() {
   state.serviceType  = null
   state.dynamicLabel = null
   state.slideshow    = null
-  slideshowChunks = []
+  slideshowChunks    = []
   collectingBase64   = false
   state._cachedServicesList = null
-  io.emit('muxReset')
+  broadcast({ type: 'muxReset' })
 
   if (!scanning) {
     state.slideshow = null
-    io.emit('image', fs.readFileSync('./public/images/default.jpg').toString('base64'))
+    broadcast({ type: 'image', data: fs.readFileSync('./public/images/default.jpg').toString('base64') })
   }
 }
 
@@ -109,6 +118,27 @@ function getTimestamp() {
   const pad = n => n.toString().padStart(2, '0')
   return `[${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}]`
 }
+
+// ================= AUDIO WS =================
+wssAudio.on('connection', ws => {
+  const ip = ws._socket.remoteAddress
+  console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} WS audio connected (${ip})`)
+
+  ws.send(JSON.stringify({ type: 'fallback', data: 'mp3' }))
+
+  const onChunk = chunk => {
+    if (ws.readyState === ws.OPEN) {
+      try { ws.send(chunk) } catch(e) {}
+    }
+  }
+
+  audioEmitter.on('chunk', onChunk)
+
+  ws.on('close', () => {
+    audioEmitter.off('chunk', onChunk)
+    console.log(`${getTimestamp()} ${colors.yellow}[INFO]${colors.reset} WS audio disconnected (${ip})`)
+  })
+})
 
 // ================= HELPER: scanResults compact 38 elemente =================
 function getScanResultsCompact() {
@@ -128,7 +158,7 @@ port.on('open', () => {
     state.enabled = true
     console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} SI4686 DAB Receiver enabled`)
     if (config.scan?.autoScanOnStart) {
-      setTimeout(() => startScan({ emit: () => {} }), 3000)
+      setTimeout(() => startScan(null), 3000)
     }
   }, 300)
 })
@@ -153,7 +183,7 @@ parser.on('data', raw => {
       slideshowChunks = []
       setImmediate(() => {
         state.slideshow = buf
-        if (buf) io.emit('image', buf)
+        if (buf) broadcast({ type: 'image', data: buf })
       })
     } else {
       slideshowChunks.push(line)
@@ -171,10 +201,10 @@ parser.on('data', raw => {
     state.service     = line.slice(9).trim()
     state.serviceType = getServiceType(state.service)
     state.slideshow   = null
-    io.emit('service', { id: state.service, type: state.serviceType })
+    broadcast({ type: 'service', id: state.service, serviceType: state.serviceType })
     if (!scanning) {
       state.slideshow = null
-      io.emit('image', fs.readFileSync('./public/images/default.jpg').toString('base64'))
+      broadcast({ type: 'image', data: fs.readFileSync('./public/images/default.jpg').toString('base64') })
     }
     return
   }
@@ -185,73 +215,70 @@ parser.on('data', raw => {
       state.tune = newTune
       resetMuxState()
     }
-    io.emit('tune', state.tune)
+    broadcast({ type: 'tune', data: state.tune })
     return
   }
 
   if (line.startsWith('$M=')) return
 
+  if (line.startsWith('$L=')) {
+    const content = line.slice(3)
+    const [headerPart, servicesPartRaw] = content.split(';SERVICES=')
+    const headerParts = headerPart.split(',')
+    const ensembleField = headerParts.find(x => x.startsWith('ENSEMBLE='))
+    if (ensembleField) state.ensemble = ensembleField.slice(9).trim()
+    const ensembleIndex = headerParts.indexOf(ensembleField)
+    if (ensembleIndex !== -1 && headerParts[ensembleIndex + 1]) {
+      state.ensembleName = headerParts[ensembleIndex + 1].trim()
+    }
+    if (servicesPartRaw) {
+      state.servicesList = servicesPartRaw.split(';').map(s => {
+        const parts = s.split(',')
+        return { id: parts[0]?.trim(), type: parts[1]?.trim(), name: parts.slice(2).join(',').trim() }
+      }).filter(s => s.id !== undefined && s.name)
+    }
+    if (state.service && !state.serviceType) {
+      state.serviceType = getServiceType(state.service)
+    }
+    broadcast({ type: 'ensembleInfo', ensemble: state.ensemble, ensembleName: state.ensembleName })
+    broadcast({ type: 'servicesList', data: state.servicesList })
 
-if (line.startsWith('$L=')) {
-  const content = line.slice(3)
-  const [headerPart, servicesPartRaw] = content.split(';SERVICES=')
-  const headerParts = headerPart.split(',')
-  const ensembleField = headerParts.find(x => x.startsWith('ENSEMBLE='))
-  if (ensembleField) state.ensemble = ensembleField.slice(9).trim()
-  const ensembleIndex = headerParts.indexOf(ensembleField)
-  if (ensembleIndex !== -1 && headerParts[ensembleIndex + 1]) {
-    state.ensembleName = headerParts[ensembleIndex + 1].trim()
-  }
-  if (servicesPartRaw) {
-    state.servicesList = servicesPartRaw.split(';').map(s => {
-      const parts = s.split(',')
-      return { id: parts[0]?.trim(), type: parts[1]?.trim(), name: parts.slice(2).join(',').trim() }
-    }).filter(s => s.id !== undefined && s.name)
-  }
-  if (state.service && !state.serviceType) {
-    state.serviceType = getServiceType(state.service)
-  }
-  io.emit('ensembleInfo', { ensemble: state.ensemble, ensembleName: state.ensembleName })
-  const newListJson = JSON.stringify(state.servicesList)
-    state._cachedServicesList = newListJson
-    io.emit('servicesList', state.servicesList)
-
-  if (!scanning && state.tune !== null) {
-    const ch = parseInt(state.tune)
-    if (!isNaN(ch)) {
-      if (state.scanResults[ch] && state.ensemble &&
-          state.scanResults[ch].ensembleId &&
-          state.scanResults[ch].ensembleId !== state.ensemble) {
+    if (!scanning && state.tune !== null) {
+      const ch = parseInt(state.tune)
+      if (!isNaN(ch)) {
+        if (state.scanResults[ch] && state.ensemble &&
+            state.scanResults[ch].ensembleId &&
+            state.scanResults[ch].ensembleId !== state.ensemble) {
           state.scanResults[ch] = null
-      }
-      if (!state.scanResults[ch]) {
-        state.scanResults[ch] = {
-          ch,
-          name:       DAB_CHANNELS_SCAN[ch].name,
-          freq:       DAB_CHANNELS_SCAN[ch].freq,
-          signal:     parseFloat(state.signal?.SIGNAL) || 0,
-          lock:       true,
-          ensemble:   state.ensembleName,
-          ensembleId: state.ensemble,
-          services:   []
         }
-      }
-      const newServices = state.servicesList
-       .filter(s => AUDIO_MODES_SERVER.includes(s.type))
-       .map(s => ({ id: s.id, name: s.name, type: s.type }))
-       if (newServices.length > 0) {
+        if (!state.scanResults[ch]) {
+          state.scanResults[ch] = {
+            ch,
+            name:       DAB_CHANNELS_SCAN[ch].name,
+            freq:       DAB_CHANNELS_SCAN[ch].freq,
+            signal:     parseFloat(state.signal?.SIGNAL) || 0,
+            lock:       true,
+            ensemble:   state.ensembleName,
+            ensembleId: state.ensemble,
+            services:   []
+          }
+        }
+        const newServices = state.servicesList
+          .filter(s => AUDIO_MODES_SERVER.includes(s.type))
+          .map(s => ({ id: s.id, name: s.name, type: s.type }))
+        if (newServices.length > 0) {
           if (newServices.length >= (state.scanResults[ch].services?.length || 0)) {
-          state.scanResults[ch].ensemble   = state.ensembleName
-          state.scanResults[ch].ensembleId = state.ensemble
-          state.scanResults[ch].lock       = true
-          state.scanResults[ch].services   = newServices
-          io.emit('scanResultsUpdated', getScanResultsCompact())
+            state.scanResults[ch].ensemble   = state.ensembleName
+            state.scanResults[ch].ensembleId = state.ensemble
+            state.scanResults[ch].lock       = true
+            state.scanResults[ch].services   = newServices
+            broadcast({ type: 'scanResultsUpdated', data: getScanResultsCompact() })
+          }
         }
       }
     }
+    return
   }
- return
-}
 
   if (line.startsWith('$I=')) {
     const obj = {}
@@ -262,7 +289,7 @@ if (line.startsWith('$L=')) {
     })
     obj.TYPE = state.serviceType
     state.serviceInfo = obj
-    io.emit('serviceInfo', obj)
+    broadcast({ type: 'serviceInfo', data: obj })
     return
   }
 
@@ -270,7 +297,7 @@ if (line.startsWith('$L=')) {
     let text = line.slice(3)
     if (text.startsWith('RT=')) text = text.slice(3)
     state.dynamicLabel = text.trim()
-    io.emit('dynamicLabel', state.dynamicLabel)
+    broadcast({ type: 'dynamicLabel', data: state.dynamicLabel })
     return
   }
 
@@ -282,27 +309,26 @@ if (line.startsWith('$L=')) {
       obj[p.slice(0, idx).trim()] = p.slice(idx + 1).trim()
     })
     state.signal = obj
-    io.emit('signal', obj)
+    broadcast({ type: 'signal', data: obj })
 
     if (state.tune !== null) {
       const ch = parseInt(state.tune)
       if (!isNaN(ch) && state.scanResults[ch]) {
         state.scanResults[ch].signal = parseFloat(obj.SIGNAL) || 0
         state.scanResults[ch].lock   = obj.LOCK === '1'
-        io.emit('scanUpdate', { ch, signal: state.scanResults[ch].signal, lock: obj.LOCK === '1' })
+        broadcast({ type: 'scanUpdate', ch, signal: state.scanResults[ch].signal, lock: obj.LOCK === '1' })
       }
     }
     return
   }
 })
 
-// ================= SOCKET =================
+// ================= DATA WEBSOCKET =================
 let connectionCount = 0
 
-io.on('connection', socket => {
+wssData.on('connection', (ws, req) => {
   connectionCount++
-  io.emit('connectionCount', connectionCount)
-  const rawIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address
+  const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || ''
   const ip = rawIp.replace('::ffff:', '').split(',')[0].trim()
 
   const geo = geoip.lookup(ip)
@@ -310,55 +336,64 @@ io.on('connection', socket => {
   if (geo) location = `${geo.city || 'Unknown city'}, ${geo.region || ''}, ${geo.country || ''}`
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} Web client connected (${ip === '::1' ? 'localhost' : ip}) [${connectionCount}] Location: ${location}`)
 
-  socket.on('disconnect', reason => {
-    connectionCount--
-    io.emit('connectionCount', connectionCount)
-    console.log(`${getTimestamp()} ${colors.yellow}[INFO]${colors.reset} Web client disconnected (${ip}) [${connectionCount}] Reason: ${reason}`)
+  broadcast({ type: 'connectionCount', count: connectionCount })
 
-  })
-
+  // trimite starea completa clientului nou
   const defaultImg = fs.readFileSync('./public/images/default.jpg').toString('base64')
-  const stateWithImg = {
+  const fullState = {
+    type: 'fullState',
     ...state,
     slideshow:   state.slideshow || defaultImg,
     scanResults: getScanResultsCompact()
   }
 
   if (!state.service) {
-    setTimeout(() => socket.emit('fullState', stateWithImg), 2000)
+    setTimeout(() => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(fullState))
+    }, 2000)
   } else {
-    socket.emit('fullState', stateWithImg)
+    ws.send(JSON.stringify(fullState))
   }
 
-  socket.on('setService', id => {
-    console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} setService: ${id} from (${ip})`)
-    port.write(`SERVICE=${id}\n`)
-    const ch = parseInt(state.tune)
-    io.emit('activeService', { ch, id: String(id) })
-  })
+  ws.on('message', raw => {
+    let msg
+    try { msg = JSON.parse(raw) } catch(e) { return }
 
-  socket.on('setTune', channel => {
-    console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} setTune: ${channel} from (${ip})`)
-    const ch = parseInt(channel)
-    if (isNaN(ch) || ch < 0 || ch > 37) {
-      socket.emit('tuneError', 'Canal invalid (0-37)')
-      return
+    if (msg.type === 'setService') {
+      console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} setService: ${msg.id} from (${ip})`)
+      port.write(`SERVICE=${msg.id}\n`)
+      const ch = parseInt(state.tune)
+      broadcast({ type: 'activeService', ch, id: String(msg.id) })
     }
-    resetMuxState()
-    port.write(`TUNE=${ch}\n`)
-    state.tune = String(ch)
-    io.emit('tune', state.tune)
+
+    if (msg.type === 'setTune') {
+      console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} setTune: ${msg.channel} from (${ip})`)
+      const ch = parseInt(msg.channel)
+      if (isNaN(ch) || ch < 0 || ch > 37) {
+        ws.send(JSON.stringify({ type: 'tuneError', data: 'Canal invalid (0-37)' }))
+        return
+      }
+      resetMuxState()
+      port.write(`TUNE=${ch}\n`)
+      state.tune = String(ch)
+      broadcast({ type: 'tune', data: state.tune })
+    }
+
+    if (msg.type === 'toggleEnable') {
+      state.enabled = !state.enabled
+      port.write(`ENABLE=${state.enabled ? 1 : 0}\n`)
+      broadcast({ type: 'enableState', data: state.enabled })
+    }
+
+    if (msg.type === 'startScan') startScan(ws)
+    if (msg.type === 'stopScan') scanning = false
   })
 
-  socket.on('toggleEnable', () => {
-    state.enabled = !state.enabled
-    port.write(`ENABLE=${state.enabled ? 1 : 0}\n`)
-    io.emit('enableState', state.enabled)
-    console.log('Enable:', state.enabled)
+  ws.on('close', reason => {
+    connectionCount--
+    broadcast({ type: 'connectionCount', count: connectionCount })
+    console.log(`${getTimestamp()} ${colors.yellow}[INFO]${colors.reset} Web client disconnected (${ip}) [${connectionCount}]`)
   })
-
-  socket.on('startScan', () => startScan(socket))
-  socket.on('stopScan',  () => { scanning = false })
 })
 
 // ================= SCANNER =================
@@ -400,25 +435,25 @@ async function waitForLock(maxMs) {
   return false
 }
 
-async function startScan(socket) {
+async function startScan(ws) {
   state.scanning = true
   state.signal = {}
   try {
     const defaultImg = fs.readFileSync('./public/images/default.jpg')
-    io.emit('image', defaultImg.toString('base64'))
+    broadcast({ type: 'image', data: defaultImg.toString('base64') })
   } catch(e) {
     console.log('Error loading default image:', e.message)
   }
 
   if (scanning) {
-    socket.emit('scanError', 'Scan already in progress')
+    if (ws) ws.send(JSON.stringify({ type: 'scanError', data: 'Scan already in progress' }))
     return
   }
   scanning = true
   const originalTune = state.tune
   const results = []
 
-  io.emit('scanStart')
+  broadcast({ type: 'scanStart' })
 
   for (let ch = 0; ch <= 37; ch++) {
     if (!scanning) break
@@ -443,13 +478,13 @@ async function startScan(socket) {
         .map(s => ({ id: s.id, name: s.name, type: s.type })) : []
     }
     results.push(result)
-    io.emit('scanProgress', { ch, total: 37, result })
+    broadcast({ type: 'scanProgress', ch, total: 37, result })
   }
 
   if (originalTune !== null) {
     port.write(`TUNE=${originalTune}\n`)
     state.tune = String(originalTune)
-    io.emit('tune', state.tune)
+    broadcast({ type: 'tune', data: state.tune })
   }
 
   for (let i = 0; i < results.length; i++) {
@@ -470,15 +505,13 @@ async function startScan(socket) {
   const compact = getScanResultsCompact()
   const found = compact.filter(r => r && r.services && r.services.length > 0).length
   state.scanStatus = `Done · ${found} found`
-  io.emit('scanComplete', compact)
+  broadcast({ type: 'scanComplete', data: compact })
 }
 
 // ================= AUDIO STREAM =================
 let audioRunning = false
 function startAudio() {
-  if (audioRunning) {
-    return
-  }
+  if (audioRunning) return
   audioRunning = true
 
   const arecord = spawn('arecord', [
@@ -513,7 +546,6 @@ function startAudio() {
   arecord.stdout.pipe(ffmpeg.stdin)
 
   ffmpeg.stdout.on('data', chunk => {
-    io.emit('audio', chunk)
     audioEmitter.emit('chunk', chunk)
   })
 
@@ -539,4 +571,3 @@ startAudio()
 server.listen(config.server.port, () => {
   console.log(`${getTimestamp()} ${colors.green}[INFO]${colors.reset} Server running on http://localhost:${config.server.port}`)
 })
-

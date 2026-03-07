@@ -83,7 +83,7 @@ body::before {
   z-index: 1;
   padding: 20px;
   display: grid;
-  grid-template-columns: 280px 520px 280px 220px;
+  grid-template-columns: 280px 560px 280px;
   gap: 16px;
   width: fit-content;
   margin: 0 auto;
@@ -339,9 +339,7 @@ body::before {
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 10px 14px;
-  height: 90px;
-  min-height: 90px;
-  max-height: 90px;
+  height: 70px;
   overflow: hidden;
 }
 
@@ -416,6 +414,7 @@ body::before {
   font-weight: 900;
   color: var(--text-bright);
   letter-spacing: 3px;
+  margin-top: 10px;
 }
 
 .status-dot {
@@ -493,7 +492,7 @@ body::before {
   margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
-  height: 109px;
+  height: 100px;
 }
 
 .svc-info-row {
@@ -812,9 +811,6 @@ body::before {
 .col-services .panel {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 160px);
-  position: sticky;
-  top: 60px;
   overflow: hidden;
 }
 
