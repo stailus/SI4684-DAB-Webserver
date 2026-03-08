@@ -1,123 +1,108 @@
-# Si4686 DAB WebServer
+# DAB Webserver
 
-The Si4686 DAB Webserver can be used with the SI4684-DAB-Receiver project (https://github.com/PE5PVB/SI4684-DAB-Receiver). It requires connecting the ESP32 to a USB port and the sound output to a sound card that has an input. 
----
-<img width="1914" height="913" alt="image" src="https://github.com/user-attachments/assets/1d7d121f-9042-4ac5-aac5-dc783305b2e8" />
-
-## Features
-
-- 🎵 **Live audio streaming** — MP3 stream via Socket.io (desktop) and HTTP endpoint `/stream` (iOS/Safari)
-- 📻 **Real-time metadata** — station name, ensemble, radio text (artist/track), service info
-- 📊 **Signal graph** — live signal strength chart with canvas
-- 🔒 **Lock indicator** — visual DAB lock status (locked/no lock)
-- 🖼️ **DAB Slideshow** — displays album art and slideshow images from the broadcast
-- 📋 **Service list** — auto-populated dropdown filtered to audio-only services (DAB/DAB+)
-- ⚙️ **Service info** — bitrate, sample rate, PTY, protection level, audio mode
-- 📡 **38 DAB Band III channels** — full channel list with frequencies
-- 🍎 **iOS compatible** — HTTP stream fallback for Safari/iOS browsers
-- ⚙️ **Config file** — all settings in `config.json`, no code changes needed
+The Si4686 DAB Webserver can be used with the SI4684-DAB-Receiver project (https://github.com/PE5PVB/SI4684-DAB-Receiver). It requires connecting the ESP32 to a USB port and the sound output to a sound card that has an input.
 
 ---
 
-## Hardware
+## Requirements
 
-- Raspberry Pi or PC
-- Silicon Labs Si4686 DAB receiver module (connected via USB serial)
-- USB audio card or HiFiBerry (for audio capture)
-
----
-
-## Project Structure
-
-```
-├── server.js          # Main Node.js server
-├── config.json        # Configuration file
-├── public/
-│   ├── index.html     # Web interface
-│   ├── css/
-│   │   └── style.css  # Styles
-│   └── js/
-│       ├── constants.js  # DAB channels, PTY map, audio modes (shared)
-│       └── main.js       # Frontend logic
-```
+- Node.js 18+
+- FFmpeg installed and available in PATH
+- SI4684-DAB-Receiver project (https://github.com/PE5PVB/SI4684-DAB-Receiver)
+- Windows: sound card accessible via DirectShow (dshow)
+- Linux/RPi: sound card accessible via ALSA (`plughw:...`)
 
 ---
 
 ## Installation
 
-### Prerequisites
-
 ```bash
-# Node.js 18+
-node -v
-
-# Install system dependencies
-sudo apt install ffmpeg alsa-utils
-```
-
-### Setup
-
-```bash
-# Clone or copy files to your Pi
-git clone https://github.com/stailus/Si4686-DAB-Webserver
-cd /home/pi/Si4686-DAB-Webserver
-
-# Install Node dependencies
 npm install
+node server.js
 ```
 
-### Configuration
+On first run, if `config.json` has no password set, the browser will be automatically redirected to the setup page.
 
-Edit `config.json` before starting:
+---
+
+## Configuration
+
+The `config.json` file is generated and edited from the setup interface (`/setup`). Structure:
 
 ```json
 {
   "serial": {
-    "port": "/dev/ttyUSB0",
+    "port": "COM3",
     "baudRate": 1000000
   },
   "audio": {
-    "device": "plughw:0,0",
+    "device": "",
     "sampleRate": 48000,
     "channels": 2,
     "bitrate": "128k"
   },
   "server": {
     "port": 3000
+  },
+  "scan": {
+    "autoScanOnStart": false
+  },
+  "auth": {
+    "password": "your_password"
   }
 }
 ```
 
-| Key | Description |
-|-----|-------------|
-| `serial.port` | Serial port of the Si4686 module |
-| `serial.baudRate` | Baud rate (default: 1000000) |
-| `audio.device` | ALSA audio capture device (run `arecord -l` to find yours) |
-| `audio.bitrate` | MP3 stream bitrate (`64k`, `128k`, `192k`) |
-| `server.port` | HTTP server port |
-
-### Finding your audio device
-
-```bash
-arecord -l
-```
-
-Example output:
-```
-card 0: sndrpihifiberry [snd_rpi_hifiberry_dac], device 0: ...
-```
-
-Then set in config: `"device": "plughw:sndrpihifiberry"`
+> **Note:** `baudRate` is fixed at `1000000` and cannot be changed from the UI. Do not modify this value manually.
 
 ---
 
-## Running
+## Setup (`/setup`)
 
-```bash
-node server.js or node . command in /home/pi/Si4686-DAB-Webserver
-```
+The setup page allows configuring the serial port, audio device, sample rate, channels, bitrate and the HTTP server port.
 
-Then open your browser at `http://<raspberry-pi-ip>:3000`
+- **First run** — if no password exists in `config.json`, you are redirected to `/setup/first-run` to set one
+- **Subsequent access** — `/setup` requires authentication; session is valid for 4 hours
+- Changes are saved to `config.json`; the server must be restarted manually after saving
 
-```
+---
 
+## Audio streaming
+
+Live audio streaming via WebSocket at the `/audio-ws` endpoint.
+
+- Windows: capture via FFmpeg DirectShow (`-f dshow`)
+- Linux: capture via arecord
+- MP3 encoding via 3LAS (Low Latency Live Audio Streaming)
+- The web client uses 3LAS for in-browser playback without plugins
+- Compatibil cu Chrome, Firefox, Safari (inclusiv iPhone)
+
+---
+
+## WebSocket data (`/data-ws`)
+
+Main communication channel between server and clients. All messages are JSON.
+
+
+---
+
+## Scanner
+
+Automatically scans all 38 DAB channels (Band III). For each detected channel it saves:
+- Channel name and frequency
+- Ensemble ID and name
+- List of available services
+- Signal level
+
+If `autoScanOnStart: true` in `config.json`, the scan starts automatically 3 seconds after server startup.
+
+---
+
+## Tested platforms
+
+| Platform | Status |
+|-----------|--------|
+| Windows 10/11 | ✅ |
+| Raspberry Pi (Linux) | ✅ |
+| iOS Safari | ✅ |
+| Android Chrome | ✅ |

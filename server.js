@@ -10,8 +10,10 @@ const fs = require('fs')
 const config = require('./config.json')
 
 const app = express()
+const { registerSetup } = require('./setup')
+registerSetup(app)
 const server = http.createServer(app)
-const logStream = fs.createWriteStream('/home/pi/serial.log', { flags: 'a' })
+const logStream = fs.createWriteStream('serial.log', { flags: 'a' })
 
 // ================= WS DATA SERVER =================
 const wssData  = new WebSocketServer({ noServer: true })
@@ -40,6 +42,15 @@ const colors = {
 }
 
 app.set('trust proxy', true)
+// Redirect la first-run daca nu e setata parola
+app.use((req, res, next) => {
+  // Lasam rutele de setup sa treaca liber
+  if (req.path.startsWith('/setup')) return next()
+  const cfg = (() => { try { return JSON.parse(require('fs').readFileSync('./config.json', 'utf8')) } catch(e) { return {} } })()
+  if (!cfg.auth?.password) return res.redirect('/setup/first-run')
+  next()
+})
+
 app.use(express.static('public'))
 
 // ================= AUDIO EMITTER =================
@@ -173,6 +184,7 @@ port.on('close', () => {
 
 // ================= PARSARE SERIAL =================
 parser.on('data', raw => {
+  //console.log('SERIAL:', raw.trim())
   const line = raw.trim()
   if (!line) return
 
@@ -191,12 +203,59 @@ parser.on('data', raw => {
     }
   }
 
+if (line.startsWith('$M=SLIDESHOW=1,BASE64=')) {
+  const buf = line.slice(22).trim()
+  state.slideshow = buf
+  state.slideshowMime = 'image/jpeg'
+  if (buf) broadcast({ type: 'image', data: buf, mime: 'image/jpeg' })
+  return
+}
+
+if (line.startsWith('$M=SLIDESHOW=2,BASE64=')) {
+  const buf = line.slice(22).trim()
+  state.slideshow = buf
+  state.slideshowMime = 'image/png'
+  if (buf) broadcast({ type: 'image', data: buf, mime: 'image/png' })
+  return
+}
+
+if (line.startsWith('$M=SLIDESHOW=0') || line.startsWith('$M=SLIDESHOW=3')) {
+  state.slideshow = ''
+  state.slideshowMime = ''
+  return
+}
+/*
+  if (line.startsWith('$M=SLIDESHOW=1,BASE64=')) {
+    const buf = line.slice(22).trim()
+    state.slideshow = buf
+    if (buf) broadcast({ type: 'image', data: buf, mime: 'image/jpeg' })
+    return
+  }
+
+  if (line.startsWith('$M=SLIDESHOW=2,BASE64=')) {
+    const buf = line.slice(22).trim()
+    state.slideshow = buf
+    if (buf) broadcast({ type: 'image', data: buf, mime: 'image/png' })
+    return
+  }
+
+  if (line.startsWith('$M=SLIDESHOW=0') || line.startsWith('$M=SLIDESHOW=3')) {
+    return
+  }
+
+  if (line.startsWith('$M=SLIDESHOW=1,BASE64=')) {
+    const buf = line.slice(22).trim()
+    state.slideshow = buf
+    if (buf) broadcast({ type: 'image', data: buf })
+    return
+  }
+
   if (line.startsWith('BASE64=')) {
     collectingBase64 = true
     slideshowChunks = []
     return
   }
-
+*/
   if (line.startsWith('*SERVICE=')) {
     state.service     = line.slice(9).trim()
     state.serviceType = getServiceType(state.service)
@@ -510,62 +569,109 @@ async function startScan(ws) {
 
 // ================= AUDIO STREAM =================
 let audioRunning = false
+
 function startAudio() {
   if (audioRunning) return
   audioRunning = true
 
-  const arecord = spawn('arecord', [
-    '-D', config.audio.device,
-    '-f', 'S16_LE',
-    '-r', String(config.audio.sampleRate),
-    '-c', String(config.audio.channels),
-    '-t', 'raw'
-  ])
+  let arecord = null
+  let ffmpeg = null
 
-  const ffmpeg = spawn('ffmpeg', [
-    '-fflags', '+nobuffer+flush_packets',
-    '-flags', 'low_delay',
-    '-rtbufsize', '32',
-    '-probesize', '32',
-    '-f', 's16le',
-    '-ar', String(config.audio.sampleRate),
-    '-ac', String(config.audio.channels),
-    '-i', 'pipe:0',
-    '-c:a', 'libmp3lame',
-    '-b:a', config.audio.bitrate,
-    '-ac', String(config.audio.channels),
-    '-reservoir', '0',
-    '-f', 'mp3',
-    '-write_xing', '0',
-    '-id3v2_version', '0',
-    '-fflags', '+nobuffer',
-    '-flush_packets', '1',
-    'pipe:1'
-  ])
+  if (process.platform === 'win32') {
+    // Windows - FFmpeg DirectShow
+    ffmpeg = spawn('ffmpeg', [
+      '-fflags', '+nobuffer+flush_packets',
+      '-flags', 'low_delay',
+      '-rtbufsize', '32',
+      '-probesize', '32',
+      '-f', 'dshow',
+      '-audio_buffer_size', '200',
+      '-i', `audio=${config.audio.device}`,
+      '-acodec', 'libmp3lame',
+      '-b:a', config.audio.bitrate,
+      '-ac', String(config.audio.channels),
+      '-reservoir', '0',
+      '-f', 'mp3',
+      '-write_xing', '0',
+      '-id3v2_version', '0',
+      '-fflags', '+nobuffer',
+      '-flush_packets', '1',
+      'pipe:1'
+    ])
 
-  arecord.stdout.pipe(ffmpeg.stdin)
+    ffmpeg.stdout.on('data', chunk => {
+      audioEmitter.emit('chunk', chunk)
+    })
 
-  ffmpeg.stdout.on('data', chunk => {
-    audioEmitter.emit('chunk', chunk)
-  })
+    ffmpeg.stderr.on('data', d => {})
 
-  ffmpeg.stderr.on('data', d => {})
+    function cleanup(reason) {
+      if (!audioRunning) return
+      audioRunning = false
+      console.log(`${getTimestamp()} ${colors.yellow}[WARN]${colors.reset} Audio oprit (${reason}), repornim in 2s...`)
+      try { ffmpeg.kill('SIGKILL') } catch(e) {}
+      setTimeout(startAudio, 2000)
+    }
 
-  function cleanup(reason) {
-    if (!audioRunning) return
-    audioRunning = false
-    console.log(`${getTimestamp()} ${colors.yellow}[WARN]${colors.reset} Audio oprit (${reason}), repornim in 2s...`)
-    try { arecord.kill('SIGKILL') } catch(e) {}
-    try { ffmpeg.kill('SIGKILL') } catch(e) {}
-    setTimeout(startAudio, 2000)
+    ffmpeg.on('close', () => cleanup('ffmpeg closed'))
+    ffmpeg.on('error', (e) => cleanup(`ffmpeg error: ${e.message}`))
+
+  } else {
+    // Linux - arecord + ffmpeg
+    arecord = spawn('arecord', [
+      '-D', config.audio.device,
+      '-f', 'S16_LE',
+      '-r', String(config.audio.sampleRate),
+      '-c', String(config.audio.channels),
+      '-t', 'raw'
+    ])
+
+    ffmpeg = spawn('ffmpeg', [
+      '-fflags', '+nobuffer+flush_packets',
+      '-flags', 'low_delay',
+      '-rtbufsize', '32',
+      '-probesize', '32',
+      '-f', 's16le',
+      '-ar', String(config.audio.sampleRate),
+      '-ac', String(config.audio.channels),
+      '-i', 'pipe:0',
+      '-c:a', 'libmp3lame',
+      '-b:a', config.audio.bitrate,
+      '-ac', String(config.audio.channels),
+      '-reservoir', '0',
+      '-f', 'mp3',
+      '-write_xing', '0',
+      '-id3v2_version', '0',
+      '-fflags', '+nobuffer',
+      '-flush_packets', '1',
+      'pipe:1'
+    ])
+
+    arecord.stdout.pipe(ffmpeg.stdin)
+
+    ffmpeg.stdout.on('data', chunk => {
+      audioEmitter.emit('chunk', chunk)
+    })
+
+    ffmpeg.stderr.on('data', d => {})
+
+    function cleanup(reason) {
+      if (!audioRunning) return
+      audioRunning = false
+      console.log(`${getTimestamp()} ${colors.yellow}[WARN]${colors.reset} Audio oprit (${reason}), repornim in 2s...`)
+      try { arecord.kill('SIGKILL') } catch(e) {}
+      try { ffmpeg.kill('SIGKILL') } catch(e) {}
+      setTimeout(startAudio, 2000)
+    }
+
+    arecord.on('close', () => cleanup('arecord closed'))
+    ffmpeg.on('close', () => cleanup('ffmpeg closed'))
+    arecord.on('error', (e) => cleanup(`arecord error: ${e.message}`))
+    ffmpeg.on('error', (e) => cleanup(`ffmpeg error: ${e.message}`))
   }
-
-  arecord.on('close', () => cleanup('arecord closed'))
-  ffmpeg.on('close',  () => cleanup('ffmpeg closed'))
-  arecord.on('error', (e) => cleanup(`arecord error: ${e.message}`))
-  ffmpeg.on('error',  (e) => cleanup(`ffmpeg error: ${e.message}`))
 }
 startAudio()
+
 
 // ================= START SERVER =================
 server.listen(config.server.port, () => {

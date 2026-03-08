@@ -19,9 +19,8 @@ var Logging = /** @class */ (function () {
             this.ParentElement.appendChild(line);
         }
         else {
-            console.log(lineText);
+            //console.log(lineText);
         }
     };
     return Logging;
 }());
-//# sourceMappingURL=3las.logging.js.map

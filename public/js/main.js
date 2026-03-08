@@ -261,6 +261,7 @@ function handleMessage(msg) {
       if (msg.scanStatus) {
         document.getElementById('scanStatus').textContent = msg.scanStatus
       }
+      if (msg.slideshow) img.src = `data:${msg.slideshowMime};base64,` + msg.slideshow
       break
 
     case 'servicesList':
@@ -330,7 +331,7 @@ function handleMessage(msg) {
       break
 
     case 'image':
-      img.src = 'data:image/jpeg;base64,' + msg.data
+      img.src = `data:${msg.mime};base64,` + msg.data
       break
 
     case 'serviceInfo':
